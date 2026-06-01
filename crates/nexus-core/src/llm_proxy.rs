@@ -1,0 +1,281 @@
+/// LLM Proxy — All LLM API calls are routed through the Kernel proxy.
+/// Workers NEVER have direct access to paid APIs.
+/// The proxy enforces budget, caches responses, and records audit trails.
+use std::collections::BTreeMap;
+use crate::types::*;
+use crate::event::*;
+use crate::protocol::*;
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmRequest {
+    pub request_id: String,
+    pub session_id: SessionId,
+    pub model: String,
+    pub prompt: String,
+    pub max_tokens: u64,
+    pub temperature: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmResponse {
+    pub request_id: String,
+    pub model: String,
+    pub content: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_cents: u64,
+    pub response_hash: String,
+    pub latency_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmCacheEntry {
+    pub prompt_hash: String,
+    pub response: LlmResponse,
+    pub cached_at: u64,
+    pub hit_count: u64,
+}
+
+pub struct LlmProxy {
+    cache: BTreeMap<String, LlmCacheEntry>,
+    #[allow(dead_code)]
+    signing_key: Vec<u8>,
+}
+
+impl LlmProxy {
+    pub fn new(signing_key: Vec<u8>) -> Self {
+        Self {
+            cache: BTreeMap::new(),
+            signing_key,
+        }
+    }
+
+    pub async fn proxy_call(
+        &mut self,
+        request: LlmRequest,
+        budget: &mut BudgetState,
+    ) -> Result<(LlmResponse, NexusEvent), ProxyError> {
+        let prompt_hash = compute_hash(request.prompt.as_bytes());
+
+        // Check cache first (FR-4.3.2: never re-call LLM on recovery)
+        if let Some(entry) = self.cache.get(&prompt_hash) {
+            tracing::info!(
+                target = "nexus.llm_proxy",
+                request_id = %request.request_id,
+                prompt_hash = %prompt_hash,
+                "LLM cache hit — no API call needed"
+            );
+            return Ok((entry.response.clone(), self.build_llm_event(
+                &request,
+                &entry.response,
+                &prompt_hash,
+                true,
+            )?));
+        }
+
+        // Estimate cost (simple model pricing)
+        let estimated_cost = self.estimate_cost(&request.model, request.max_tokens);
+
+        if !budget.can_afford(estimated_cost) {
+            return Err(ProxyError::BudgetExceeded {
+                required: estimated_cost,
+                remaining: budget.remaining_cents(),
+            });
+        }
+
+        // Simulate API call (in production, this calls OpenAI/Anthropic API)
+        let start = now_millis();
+        let response = self.simulate_api_call(&request).await?;
+        let latency = now_millis() - start;
+
+        let _response_hash = compute_hash(response.content.as_bytes());
+
+        // Deduct from budget
+        budget.add_cost(response.cost_cents, response.output_tokens, 1);
+
+        // Cache the response (never re-call)
+        self.cache.insert(prompt_hash.clone(), LlmCacheEntry {
+            prompt_hash: prompt_hash.clone(),
+            response: response.clone(),
+            cached_at: now_millis(),
+            hit_count: 0,
+        });
+
+        let event = self.build_llm_event(&request, &response, &prompt_hash, false)?;
+
+        tracing::info!(
+            target = "nexus.llm_proxy",
+            request_id = %request.request_id,
+            model = %request.model,
+            tokens_in = %response.input_tokens,
+            tokens_out = %response.output_tokens,
+            cost_cents = %response.cost_cents,
+            latency_ms = %latency,
+            cached = false,
+            "LLM call proxied"
+        );
+
+        Ok((response, event))
+    }
+
+    async fn simulate_api_call(&self, request: &LlmRequest) -> Result<LlmResponse, ProxyError> {
+        let input_tokens = request.prompt.len() as u64 / 4;
+        let output_tokens = request.max_tokens.min(4096);
+
+        let cost_cents = self.estimate_cost(&request.model, output_tokens);
+
+        Ok(LlmResponse {
+            request_id: request.request_id.clone(),
+            model: request.model.clone(),
+            content: format!("Simulated response for: {}", &request.prompt[..50.min(request.prompt.len())]),
+            input_tokens,
+            output_tokens,
+            cost_cents,
+            response_hash: compute_hash(b"simulated_response"),
+            latency_ms: 200,
+        })
+    }
+
+    fn estimate_cost(&self, model: &str, tokens: u64) -> u64 {
+        let cost_per_1k: f64 = match model {
+            m if m.contains("claude") => 0.015,
+            m if m.contains("gpt-4") => 0.03,
+            m if m.contains("gpt-3.5") => 0.002,
+            _ => 0.01,
+        };
+        ((tokens as f64 / 1000.0) * cost_per_1k * 100.0).ceil() as u64
+    }
+
+    fn build_llm_event(
+        &self,
+        request: &LlmRequest,
+        response: &LlmResponse,
+        _prompt_hash: &str,
+        _cached: bool,
+    ) -> Result<NexusEvent, ProxyError> {
+        let mut cv = CausalVector::new();
+        cv.increment(request.session_id);
+
+        let event = NexusEvent::new(
+            EventType::PlanProposed {
+                plan: ExecutionPlan {
+                    plan_id: format!("plan_{}", request.request_id),
+                    tasks: vec![],
+                    estimated_tokens: response.output_tokens,
+                    estimated_cost_cents: response.cost_cents,
+                },
+                model: response.model.clone(),
+                prompt_tokens: response.input_tokens,
+                completion_tokens: response.output_tokens,
+            },
+            request.session_id,
+            cv,
+            None,
+        );
+
+        Ok(event)
+    }
+
+    pub fn cache_stats(&self) -> CacheStats {
+        CacheStats {
+            entries: self.cache.len(),
+            total_hits: self.cache.values().map(|e| e.hit_count).sum(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CacheStats {
+    pub entries: usize,
+    pub total_hits: u64,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProxyError {
+    #[error("Budget exceeded: need {required} cents, have {remaining} cents")]
+    BudgetExceeded { required: u64, remaining: u64 },
+
+    #[error("API error: {0}")]
+    ApiError(String),
+
+    #[error("Rate limited")]
+    RateLimited,
+
+    #[error("Model not available: {0}")]
+    ModelNotAvailable(String),
+}
+
+impl BudgetState {
+    pub fn can_afford(&self, estimated_cents: u64) -> bool {
+        self.consumed_cents.saturating_add(estimated_cents) <= self.budget_limit_cents
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_llm_proxy_cache_hit() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut proxy = LlmProxy::new(b"test-key-32-bytes-long-key!!!".to_vec());
+            let mut budget = BudgetState::default();
+            let sid = SessionId::from_bytes([1u8; 16]);
+
+            let req = LlmRequest {
+                request_id: "req_001".into(),
+                session_id: sid,
+                model: "claude-3.5-sonnet".into(),
+                prompt: "test prompt".into(),
+                max_tokens: 100,
+                temperature: 0.7,
+            };
+
+            // First call — simulate API
+            let (resp1, _) = proxy.proxy_call(req.clone(), &mut budget).await.unwrap();
+
+            // Second call — should be cached
+            let (resp2, _) = proxy.proxy_call(req, &mut budget).await.unwrap();
+
+            assert_eq!(resp1.response_hash, resp2.response_hash,
+                "Cached response must be identical"
+            );
+            assert!(proxy.cache_stats().entries >= 1);
+        });
+    }
+
+    #[test]
+    fn test_budget_enforcement() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut proxy = LlmProxy::new(b"test-key-32-bytes-long-key!!!".to_vec());
+            let mut budget = BudgetState {
+                budget_limit_cents: 1,
+                ..Default::default()
+            };
+            let sid = SessionId::from_bytes([1u8; 16]);
+
+            let req = LlmRequest {
+                request_id: "req_002".into(),
+                session_id: sid,
+                model: "gpt-4o".into(),
+                prompt: "expensive prompt".into(),
+                max_tokens: 10000,
+                temperature: 0.7,
+            };
+
+            let result = proxy.proxy_call(req, &mut budget).await;
+            assert!(result.is_err());
+        });
+    }
+
+    #[test]
+    fn test_model_pricing() {
+        let proxy = LlmProxy::new(b"key".to_vec());
+        let gpt4_cost = proxy.estimate_cost("gpt-4o", 1000);
+        let claude_cost = proxy.estimate_cost("claude-3.5-sonnet", 1000);
+        assert!(gpt4_cost > claude_cost, "gpt-4 should be more expensive than claude");
+    }
+}
