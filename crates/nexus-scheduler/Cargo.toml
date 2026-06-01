@@ -13,3 +13,11 @@ thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true
 hex.workspace = true
+bollard = { workspace = true, optional = true }
+kube = { workspace = true, optional = true }
+k8s-openapi = { workspace = true, optional = true }
+
+[features]
+default = []
+docker = ["bollard"]
+kube-integration = ["kube", "k8s-openapi"]

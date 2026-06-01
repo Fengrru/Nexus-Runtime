@@ -394,3 +394,331 @@ mod tests {
         assert!(check.is_ok(), "Phoenix invariants failed: {}", check.unwrap_err());
     }
 }
+
+#[cfg(test)]
+mod integration {
+    use super::*;
+    use nexus_core::*;
+    use nexus_core::event::*;
+    use nexus_core::recovery::*;
+    use nexus_core::effects::*;
+    use nexus_core::export::SessionExport;
+    use nexus_core::entropy::*;
+    use nexus_event_store::*;
+    use std::collections::BTreeMap;
+
+    async fn setup_store() -> (SqliteEventStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("e2e_test.db");
+        let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+        let store = SqliteEventStore::new(&db_url).await.unwrap();
+        (store, dir)
+    }
+
+    #[tokio::test]
+    async fn e2e_full_session_lifecycle() {
+        let (store, _dir) = setup_store().await;
+        let sid = SessionId::from_bytes([0xE2, 0xE2, 0,0,0,0,0,0,0,0,0,0,0,0,0,0]);
+
+        // Phase 1: Intake
+        let mut seq = 0u64;
+        seq += 1;
+        let mut cv = CausalVector::new();
+        cv.increment(sid);
+        store.append_event(&NexusEvent::new(
+            EventType::IntentReceived { raw_input: "refactor auth to JWT".into(), source: "e2e".into() },
+            sid, cv.clone(), None,
+        )).await.unwrap();
+
+        seq += 1;
+        cv.increment(sid);
+        store.append_event(&NexusEvent::new(
+            EventType::IntentParsed { intent_graph: IntentGraph::default() },
+            sid, cv.clone(), None,
+        )).await.unwrap();
+
+        seq += 1;
+        cv.increment(sid);
+        store.append_event(&NexusEvent::new(
+            EventType::PlanCommitted { frontier: Frontier::empty() },
+            sid, cv.clone(), None,
+        )).await.unwrap();
+
+        seq += 1;
+        cv.increment(sid);
+        store.append_event(&NexusEvent::new(
+            EventType::DependenciesMet, sid, cv.clone(), None,
+        )).await.unwrap();
+
+        // Phase 2: Execution with checkpoints
+        seq += 1;
+        cv.increment(sid);
+        store.append_event(&NexusEvent::new(
+            EventType::WorkerCheckpoint {
+                task_id: TaskId::from_bytes([0xAA; 16]),
+                step_index: 3,
+                actions: vec![],
+                artifacts: vec![],
+            },
+            sid, cv.clone(), None,
+        )).await.unwrap();
+
+        seq += 1;
+        cv.increment(sid);
+        store.append_event(&NexusEvent::new(
+            EventType::WorkerCheckpoint {
+                task_id: TaskId::from_bytes([0xAA; 16]),
+                step_index: 7,
+                actions: vec![],
+                artifacts: vec![],
+            },
+            sid, cv.clone(), None,
+        )).await.unwrap();
+
+        // Phase 3: Simulate crash & recover
+        let events = store.get_events(sid, None).await.unwrap();
+        assert_eq!(events.len(), 6);
+
+        let rm = RecoveryManager::new("/tmp/e2e_vault".into());
+        let recovered = rm.recover_from_events(&events, sid).unwrap();
+
+        assert!(recovered.report.causal_valid);
+        assert!(recovered.report.replay_success);
+        assert_eq!(recovered.state.status, SessionStatus::Checkpointing);
+        assert_eq!(recovered.state.checkpoint_seq, 7);
+        assert!(recovered.recovery_plan.is_some());
+
+        // Phase 4: Export & re-import
+        let export = SessionExport::from_session(
+            &events, sid, MemoryGraph::default(), recovered.state.causal_vector.clone(),
+        );
+        assert!(export.verify_integrity().is_ok());
+
+        let json = export.to_json().unwrap();
+        let reimported = SessionExport::from_json(&json).unwrap();
+        let replayed = reimported.replay_into_state().unwrap();
+        assert_eq!(replayed.checkpoint_seq, 7);
+        assert_eq!(replayed.status, SessionStatus::Checkpointing);
+    }
+
+    #[tokio::test]
+    async fn e2e_side_effect_two_phase_commit() {
+        let mut guard = SideEffectGuard::new();
+        let sid = SessionId::from_bytes([0xB1; 16]);
+        let tid = TaskId::from_bytes([0xB2; 16]);
+
+        // Phase 1: Record intent
+        let intent = SideEffectIntent {
+            id: "se_e2e_001".into(),
+            session_id: sid,
+            task_id: tid,
+            effect_class: SideEffectClass::Idempotent,
+            action_type: "write_file".into(),
+            target: "/tmp/e2e_test.txt".into(),
+            payload: b"hello e2e".to_vec(),
+            request_hash: "e2e_hash_001".into(),
+            preconditions: vec![],
+        };
+
+        let effect_id = guard.record_intent(intent).unwrap();
+        assert!(!effect_id.is_empty());
+
+        // Get recovery action for PENDING effect
+        let action = guard.get_recovery_action(&effect_id).unwrap();
+        assert!(matches!(action, RecoveryAction::Replay));
+
+        // Phase 2: Commit
+        let result = guard.commit_effect(&effect_id, "resp_hash_e2e").unwrap();
+        assert!(result.success);
+
+        // Verify committed
+        let committed_action = guard.get_recovery_action(&effect_id).unwrap();
+        assert!(matches!(committed_action, RecoveryAction::UseCached));
+
+        // Verify idempotency
+        let duplicate = guard.record_intent(SideEffectIntent {
+            id: "se_e2e_001".into(),
+            session_id: sid,
+            task_id: tid,
+            effect_class: SideEffectClass::Idempotent,
+            action_type: "write_file".into(),
+            target: "/tmp/e2e_test.txt".into(),
+            payload: b"hello e2e".to_vec(),
+            request_hash: "e2e_hash_001".into(),
+            preconditions: vec![],
+        }).unwrap();
+        assert_eq!(duplicate, effect_id);
+    }
+
+    #[tokio::test]
+    async fn e2e_budget_exhaustion_blocks_session() {
+        let sid = SessionId::from_bytes([0xC1; 16]);
+        let mut state = NexusState::new(sid, now_millis());
+        state.budget.budget_limit_cents = 100;
+
+        let dag = BTreeMap::new();
+
+        // Drive to executing
+        let mut cv = CausalVector::new();
+        cv.increment(sid);
+        state = transition(&state, &NexusEvent::new(
+            EventType::IntentReceived { raw_input: "expensive task".into(), source: "e2e".into() },
+            sid, cv.clone(), None,
+        ), &dag).unwrap();
+
+        cv.increment(sid);
+        state = transition(&state, &NexusEvent::new(
+            EventType::IntentParsed { intent_graph: IntentGraph::default() },
+            sid, cv.clone(), None,
+        ), &dag).unwrap();
+
+        cv.increment(sid);
+        state = transition(&state, &NexusEvent::new(
+            EventType::PlanCommitted { frontier: Frontier::empty() },
+            sid, cv.clone(), None,
+        ), &dag).unwrap();
+
+        cv.increment(sid);
+        state = transition(&state, &NexusEvent::new(
+            EventType::DependenciesMet, sid, cv.clone(), None,
+        ), &dag).unwrap();
+
+        assert_eq!(state.status, SessionStatus::Executing);
+
+        // Exhaust budget
+        state.budget.add_cost(150, 1000, 5);
+        assert!(state.budget.is_exhausted());
+
+        // Worker fails with fatal error (e.g., budget)
+        cv.increment(sid);
+        state = transition(&state, &NexusEvent::new(
+            EventType::WorkerFailed {
+                worker_id: "w1".into(),
+                task_id: TaskId::from_bytes([0xDD; 16]),
+                error: "budget exceeded".into(),
+                error_code: ErrorCode::Fatal,
+                retry_count: 0,
+            },
+            sid, cv.clone(), None,
+        ), &dag).unwrap();
+
+        assert_eq!(state.status, SessionStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn e2e_concurrent_session_isolation() {
+        let (store, _dir) = setup_store().await;
+
+        let sid1 = SessionId::from_bytes([0xD1; 16]);
+        let sid2 = SessionId::from_bytes([0xD2; 16]);
+
+        // Session 1: completed
+        let mut cv1 = CausalVector::new();
+        cv1.increment(sid1);
+        store.append_event(&NexusEvent::new(
+            EventType::IntentReceived { raw_input: "task 1".into(), source: "e2e".into() },
+            sid1, cv1, None,
+        )).await.unwrap();
+
+        // Session 2: separate intent
+        let mut cv2 = CausalVector::new();
+        cv2.increment(sid2);
+        store.append_event(&NexusEvent::new(
+            EventType::IntentReceived { raw_input: "task 2".into(), source: "e2e".into() },
+            sid2, cv2, None,
+        )).await.unwrap();
+
+        // Verify isolation
+        let events1 = store.get_events(sid1, None).await.unwrap();
+        let events2 = store.get_events(sid2, None).await.unwrap();
+        assert_eq!(events1.len(), 1);
+        assert_eq!(events2.len(), 1);
+        assert_ne!(events1[0].session_id, events2[0].session_id);
+    }
+
+    #[tokio::test]
+    async fn e2e_cross_session_memory_inheritance() {
+        let sid_a = SessionId::from_bytes([0xAA; 16]);
+        let sid_b = SessionId::from_bytes([0xBB; 16]);
+
+        // Session A builds knowledge
+        let mut mem_a = MemoryGraph::new();
+        mem_a.add_node(MemoryNode {
+            id: "knowledge_001".into(),
+            content: MemoryContent::Text { text: "JWT tokens reduce DB load by 80%".into() },
+            embedding: None,
+            causal_context: CausalVector::singleton(sid_a, 5),
+            importance: 900,
+            activation: 0,
+            source_event_id: "evt_001".into(),
+            session_lineage: vec![sid_a],
+            created_at: now_millis(),
+        });
+
+        // Export from A
+        let mut cv_a = CausalVector::singleton(sid_a, 5);
+        let export = SessionExport::from_session(&[], sid_a, mem_a, cv_a.clone());
+
+        // Session B inherits
+        let mut mem_b = MemoryGraph::new();
+        let mut cv_b = CausalVector::singleton(sid_a, 10);
+        cv_b.increment(sid_b);
+
+        let imported = export.inherit_memories_into(&mut mem_b, &cv_b).unwrap();
+        assert!(!imported.is_empty());
+        assert!(mem_b.nodes.len() >= 1);
+
+        let node = mem_b.nodes.values().next().unwrap();
+        assert!(node.session_lineage.contains(&sid_a));
+    }
+
+    #[tokio::test]
+    async fn e2e_entropy_controller_integration() {
+        let controller = EntropyController::default();
+
+        // Normal operation
+        let normal = EntropySignals::new(0.05, 0.02, 0.01);
+        let score = controller.calculate(&normal);
+        assert!(score < controller.thresholds.warning);
+        assert_eq!(controller.get_entropy_level(score), EntropyLevel::Normal);
+        assert!(controller.respond(score).is_empty());
+
+        // Warning level
+        let warn = EntropySignals::new(0.5, 0.3, 0.1);
+        let score = controller.calculate(&warn);
+        assert!(score >= controller.thresholds.warning);
+        assert_eq!(controller.get_entropy_level(score), EntropyLevel::Warning);
+
+        // Circuit breaker
+        let critical = EntropySignals::new(1.0, 1.0, 0.9);
+        let score = controller.calculate(&critical);
+        assert!(score >= controller.thresholds.circuit_breaker);
+        assert_eq!(controller.get_entropy_level(score), EntropyLevel::CircuitBreaker);
+        let actions = controller.respond(score);
+        assert!(actions.contains(&EntropyAction::HaltExecution));
+    }
+
+    #[tokio::test]
+    async fn e2e_causal_vector_cross_node_merge() {
+        let sid_a = SessionId::from_bytes([0xA1; 16]);
+        let sid_b = SessionId::from_bytes([0xB1; 16]);
+        let sid_c = SessionId::from_bytes([0xC1; 16]);
+
+        // Node A: 5 events
+        let mut cv_a = CausalVector::new();
+        for _ in 0..5 { cv_a.increment(sid_a); }
+
+        // Node B: 3 events
+        let mut cv_b = CausalVector::new();
+        for _ in 0..3 { cv_b.increment(sid_a); }
+        cv_b.increment(sid_b);
+
+        // Merge
+        cv_a.merge(&cv_b);
+        assert_eq!(cv_a.0.get(&sid_a), Some(&5));
+        assert_eq!(cv_a.0.get(&sid_b), Some(&1));
+
+        // causally-consistent
+        assert!(cv_a.is_consistent());
+    }
+}

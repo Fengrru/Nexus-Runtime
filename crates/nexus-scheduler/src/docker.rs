@@ -7,6 +7,7 @@ pub struct DockerScheduler {
     lock_table: BTreeMap<String, TaskId>,
     max_concurrency: usize,
     active_workers: BTreeMap<TaskId, String>,
+    #[allow(dead_code)]
     docker_socket: String,
 }
 

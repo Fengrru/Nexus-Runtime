@@ -24,3 +24,8 @@ sha3.workspace = true
 hex-literal.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "benchmarks"
+harness = false

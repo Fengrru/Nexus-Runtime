@@ -63,7 +63,9 @@ pub struct MultiAgentCoordinator<S: EventStore> {
 struct CoordinationState {
     phase: CoordinationPhase,
     votes: BTreeMap<SessionId, CoordinationVote>,
+    #[allow(dead_code)]
     proposal: Proposal,
+    #[allow(dead_code)]
     started_at: u64,
 }
 
@@ -134,7 +136,7 @@ impl<S: EventStore> MultiAgentCoordinator<S> {
 
         state.votes.insert(voter_id, vote);
 
-        let total_participants = state.votes.len();
+        let _total_participants = state.votes.len();
         let approved = state.votes.values().filter(|v| v.approved).count();
 
         Ok(approved >= self.quorum_size)

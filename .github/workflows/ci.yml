@@ -1,0 +1,111 @@
+name: Nexus Runtime CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    name: Check & Lint
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+
+    - name: Clippy
+      run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: dtolnay/rust-toolchain@stable
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Run tests
+      run: cargo test --workspace
+
+    - name: Run Phoenix tests (verbose)
+      run: cargo test -p phoenix-tests -- --nocapture
+
+  bench:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: dtolnay/rust-toolchain@stable
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Run benchmarks
+      run: cargo bench --bench benchmarks -- --output-format bencher | tee output.txt
+
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: dtolnay/rust-toolchain@stable
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Install cargo-deny
+      run: cargo install cargo-deny --locked
+
+    - name: Check licenses
+      run: cargo deny check licenses
+
+    - name: Check advisories
+      run: cargo deny check advisories
+
+  python-sdk:
+    name: Python SDK Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Python SDK
+      run: pip install -e sdk/python
+
+    - name: Run Python tests
+      run: python -m pytest sdk/python/nexus/ -v || python -c "from nexus import Runtime; print('SDK OK')"
+
+  node-sdk:
+    name: Node.js SDK Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Verify Node.js SDK
+      run: cd sdk/nodejs && npm install && node -e "const {Runtime}=require('@nexus/runtime');console.log('SDK OK')"

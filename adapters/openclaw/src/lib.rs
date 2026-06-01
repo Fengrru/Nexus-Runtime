@@ -4,6 +4,7 @@ use serde::{Serialize, Deserialize};
 #[derive(Debug, Clone)]
 pub struct OpenClawGatewayAdapter {
     session_id: Option<SessionId>,
+    #[allow(dead_code)]
     gateway_url: String,
 }
 

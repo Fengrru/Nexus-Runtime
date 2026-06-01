@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use async_trait::async_trait;
 use nexus_core::*;
 use nexus_event_store::{EventStore, StoreError};
@@ -285,7 +284,7 @@ impl TemporalWorkflowManager {
 
     pub async fn query_workflow_state(
         &self,
-        workflow_id: &str,
+        _workflow_id: &str,
     ) -> Result<WorkflowState, String> {
         Ok(WorkflowState::Running)
     }
