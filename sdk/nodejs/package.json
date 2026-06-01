@@ -1,0 +1,13 @@
+{
+  "name": "@nexus/runtime",
+  "version": "1.0.0",
+  "description": "Nexus Runtime — Durable execution substrate for AI agents",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "license": "MIT",
+  "files": ["src/"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test src/*.test.js"
+  }
+}

@@ -1,0 +1,16 @@
+[package]
+name = "nexus-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nexus-core = { path = "../../crates/nexus-core" }
+nexus-event-store = { path = "../../crates/nexus-event-store" }
+nexus-rpc = { path = "../../crates/nexus-rpc" }
+nexus-security = { path = "../../crates/nexus-security" }
+nexus-scheduler = { path = "../../crates/nexus-scheduler" }
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

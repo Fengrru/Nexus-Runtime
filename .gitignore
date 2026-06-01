@@ -1,0 +1,13 @@
+/target/
+**/*.rs.bk
+Cargo.lock
+*.db
+*.db-journal
+*.db-wal
+/.nexus/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store

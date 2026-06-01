@@ -1,0 +1,57 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/nexus-core",
+    "crates/nexus-event-store",
+    "crates/nexus-rpc",
+    "crates/nexus-security",
+    "crates/nexus-scheduler",
+    "crates/phoenix-tests",
+    "crates/nexus-cli",
+    "crates/nexus-temporal",
+    "crates/nexus-message-bus",
+    "crates/nexus-coordinator",
+    "crates/nexus-metrics",
+    "workers/rust-worker",
+    "adapters/openclaw",
+    "adapters/hermes",
+    "sdk/rust",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nexus-runtime/nexus"
+rust-version = "1.80"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+rmp-serde = "1"
+blake3 = "1"
+hex = "0.4"
+sha2 = "0.10"
+hmac = "0.12"
+sha3 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres"] }
+async-trait = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde_json = "1"
+zstd = "0.13"
+rand = "0.8"
+chrono = "0.4"
+tempfile = "3"
+nix = { version = "0.29", features = ["signal"] }
+hex-literal = "0.4"
+clap = { version = "4", features = ["derive"] }
+prometheus = { version = "0.13", features = ["process"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

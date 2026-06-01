@@ -1,0 +1,154 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-kernel
+  namespace: nexus
+  labels:
+    app: nexus-kernel
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nexus-kernel
+  template:
+    metadata:
+      labels:
+        app: nexus-kernel
+    spec:
+      serviceAccountName: nexus-kernel
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+      - name: kernel
+        image: nexus/enterprise:latest
+        ports:
+        - containerPort: 3000
+          name: api
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: NEXUS_MODE
+          value: "enterprise"
+        - name: TEMPORAL_HOST
+          value: "temporal-frontend.temporal:7233"
+        - name: NEXUS_DB_URL
+          valueFrom:
+            secretKeyRef:
+              name: nexus-db-secret
+              key: url
+        - name: NEXUS_MESSAGE_BUS_PEERS
+          value: "nexus-kernel-0.nexus:8080,nexus-kernel-1.nexus:8080,nexus-kernel-2.nexus:8080"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-worker
+  namespace: nexus
+  labels:
+    app: nexus-worker
+spec:
+  replicas: 10
+  selector:
+    matchLabels:
+      app: nexus-worker
+  template:
+    metadata:
+      labels:
+        app: nexus-worker
+    spec:
+      serviceAccountName: nexus-worker
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        readOnlyRootFilesystem: true
+      containers:
+      - name: python-worker
+        image: nexus-runtime/python-worker:v1.0.0
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-kernel
+  namespace: nexus
+spec:
+  selector:
+    app: nexus-kernel
+  ports:
+  - name: api
+    port: 3000
+    targetPort: 3000
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nexus-kernel
+  namespace: nexus
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nexus-worker
+  namespace: nexus
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nexus-worker-pod-manager
+  namespace: nexus
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nexus-kernel-pod-manager
+  namespace: nexus
+subjects:
+- kind: ServiceAccount
+  name: nexus-kernel
+  namespace: nexus
+roleRef:
+  kind: Role
+  name: nexus-worker-pod-manager
+  apiGroup: rbac.authorization.k8s.io

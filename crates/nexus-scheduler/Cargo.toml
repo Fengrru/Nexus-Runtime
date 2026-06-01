@@ -1,0 +1,15 @@
+[package]
+name = "nexus-scheduler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nexus-core = { path = "../nexus-core" }
+tokio.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+hex.workspace = true

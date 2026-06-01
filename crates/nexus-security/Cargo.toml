@@ -1,0 +1,20 @@
+[package]
+name = "nexus-security"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nexus-core = { path = "../nexus-core" }
+serde.workspace = true
+rmp-serde.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.3"

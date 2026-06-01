@@ -1,0 +1,10 @@
+[package]
+name = "hermes-adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nexus-core = { path = "../../crates/nexus-core" }
+serde.workspace = true
+tracing.workspace = true

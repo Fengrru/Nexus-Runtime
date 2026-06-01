@@ -1,0 +1,7 @@
+{
+  "name": "@nexus/node-worker",
+  "version": "1.0.0",
+  "description": "Nexus Runtime — Node.js Worker",
+  "main": "main.js",
+  "license": "MIT"
+}
