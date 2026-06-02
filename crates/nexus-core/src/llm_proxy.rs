@@ -183,6 +183,62 @@ impl LlmProxy {
             total_hits: self.cache.values().map(|e| e.hit_count).sum(),
         }
     }
+
+    /// Persist cache entries as LLM call records for recovery.
+    /// On restart, the event log provides immutable cache — no re-calling APIs.
+    pub fn persist_to_events(&self, session_id: SessionId) -> Vec<NexusEvent> {
+        self.cache.iter().map(|(prompt_hash, entry)| {
+            let mut cv = CausalVector::new();
+            cv.increment(session_id);
+
+            NexusEvent {
+                event_id: generate_event_id(),
+                event_type: EventType::MemoryConsolidated {
+                    memory_ids: vec![format!("llm_cache:{}", &prompt_hash[..16])],
+                },
+                session_id,
+                trace_id: generate_trace_id(),
+                parent_event_id: None,
+                causal_vector: cv,
+                payload: serde_json::to_vec(&entry.response).unwrap_or_default(),
+                payload_hash: prompt_hash.clone(),
+                event_timestamp: entry.cached_at,
+                nonce: generate_nonce(),
+                integrity_hash: String::new(),
+            }
+        }).collect()
+    }
+
+    /// Restore cache from persisted LLM call records in the event log.
+    pub fn restore_from_events(&mut self, events: &[NexusEvent]) -> usize {
+        let mut restored = 0;
+        for event in events {
+            if let EventType::MemoryConsolidated { memory_ids } = &event.event_type {
+                for id in memory_ids {
+                    if id.starts_with("llm_cache:") {
+                        if let Ok(response) = serde_json::from_slice::<LlmResponse>(&event.payload) {
+                            self.cache.insert(
+                                event.payload_hash.clone(),
+                                LlmCacheEntry {
+                                    prompt_hash: event.payload_hash.clone(),
+                                    response,
+                                    cached_at: event.event_timestamp,
+                                    hit_count: 1,
+                                },
+                            );
+                            restored += 1;
+                        }
+                    }
+                }
+            }
+        }
+        tracing::info!(
+            target = "nexus.llm_proxy",
+            restored_entries = %restored,
+            "LLM cache restored from event log"
+        );
+        restored
+    }
 }
 
 #[derive(Debug, Clone)]

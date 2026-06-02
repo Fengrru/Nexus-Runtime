@@ -12,6 +12,7 @@ pub mod migration;
 pub mod llm_proxy;
 pub mod vault;
 pub mod wasm_worker;
+pub mod worker_spawner;
 
 pub use types::*;
 pub use event::*;
@@ -26,6 +27,7 @@ pub use migration::{CrossNodeSession, SessionMigrationManager, MigrationStatus};
 pub use llm_proxy::{LlmProxy, LlmRequest, LlmResponse, ProxyError};
 pub use vault::{ContentVault, VaultEntry, VaultError};
 pub use wasm_worker::{WasmSkill, WasmSandboxWorker, WasmSkillRegistry, WasmInput, WasmOutput, SandboxViolation};
+pub use worker_spawner::{WorkerSpawner, WorkerConfig as SpawnerConfig, WorkerHandle, WorkerStatus};
 
 #[cfg(test)]
 mod golden_tests;

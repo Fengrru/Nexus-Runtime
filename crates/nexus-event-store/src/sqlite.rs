@@ -184,41 +184,162 @@ impl EventStore for SqliteEventStore {
 
     async fn record_side_effect_intent(
         &self,
-        _intent: &SideEffectIntent,
+        intent: &SideEffectIntent,
     ) -> Result<(), StoreError> {
+        let request_payload = rmp_serde::to_vec(&intent.payload)
+            .map_err(|e| StoreError::SerializationError(e.to_string()))?;
+        let idempotency_key = format!(
+            "{}:{}",
+            intent.session_id.to_hex(),
+            intent.request_hash
+        );
+        let id = uuid::Uuid::new_v4().into_bytes().to_vec();
+
+        sqlx::query(
+            "INSERT OR REPLACE INTO side_effects (
+                id, session_id, event_id, idempotency_key,
+                effect_class, status, request_payload, request_hash,
+                response_payload, response_hash, compensation_data, committed_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'PENDING', ?6, ?7, NULL, NULL, NULL, NULL)"
+        )
+        .bind(&id)
+        .bind(intent.session_id.as_bytes().as_slice())
+        .bind(&intent.id)
+        .bind(&idempotency_key)
+        .bind(format!("{:?}", intent.effect_class).to_uppercase())
+        .bind(&request_payload)
+        .bind(&intent.request_hash)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
+
         Ok(())
     }
 
     async fn commit_side_effect(
         &self,
-        _id: &[u8],
-        _response_hash: &str,
+        id: &[u8],
+        response_hash: &str,
     ) -> Result<(), StoreError> {
+        let rows = sqlx::query(
+            "UPDATE side_effects SET
+                status = 'COMMITTED',
+                response_hash = ?2,
+                committed_at = ?3
+             WHERE id = ?1 AND status = 'PENDING'"
+        )
+        .bind(id)
+        .bind(response_hash)
+        .bind(nexus_core::now_millis() as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
+
+        if rows.rows_affected() == 0 {
+            return Err(StoreError::EventNotFound(
+                format!("side effect {:?} not found or already committed", id)
+            ));
+        }
+
         Ok(())
     }
 
     async fn acquire_lock(
         &self,
-        _resource_id: &str,
-        _session_id: SessionId,
-        _mode: LockMode,
+        resource_id: &str,
+        session_id: SessionId,
+        mode: LockMode,
     ) -> Result<bool, StoreError> {
+        let now = nexus_core::now_millis() as i64;
+        let mode_str = match mode {
+            LockMode::Exclusive => "EXCLUSIVE",
+            LockMode::Shared => "SHARED",
+        };
+
+        sqlx::query(
+            "INSERT OR REPLACE INTO resource_locks (
+                resource_id, owner_session, owner_task, mode,
+                acquired_at, lease_expiry, generation
+            ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, 1)"
+        )
+        .bind(resource_id)
+        .bind(session_id.as_bytes().as_slice())
+        .bind(mode_str)
+        .bind(now)
+        .bind(now + 60_000) // 60s default lease
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
+
         Ok(true)
     }
 
     async fn release_lock(
         &self,
-        _resource_id: &str,
-        _session_id: SessionId,
+        resource_id: &str,
+        session_id: SessionId,
     ) -> Result<bool, StoreError> {
-        Ok(true)
+        let rows = sqlx::query(
+            "DELETE FROM resource_locks
+             WHERE resource_id = ?1 AND owner_session = ?2"
+        )
+        .bind(resource_id)
+        .bind(session_id.as_bytes().as_slice())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
+
+        Ok(rows.rows_affected() > 0)
     }
 
-    async fn record_llm_call(&self, _call: &LlmCallRecord) -> Result<(), StoreError> {
+    async fn record_llm_call(&self, call: &LlmCallRecord) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO llm_calls (
+                request_id, session_id, event_id, model,
+                prompt_hash, response_hash, input_tokens, output_tokens,
+                cost_usd_cents, status, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+        )
+        .bind(&call.request_id)
+        .bind(call.session_id.as_bytes().as_slice())
+        .bind(&call.event_id)
+        .bind(&call.model)
+        .bind(&call.prompt_hash)
+        .bind(&call.response_hash)
+        .bind(call.input_tokens)
+        .bind(call.output_tokens)
+        .bind(call.cost_usd_cents)
+        .bind(&call.status)
+        .bind(call.created_at as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
+
         Ok(())
     }
 
-    async fn register_artifact(&self, _artifact: &ArtifactRef) -> Result<(), StoreError> {
+    async fn register_artifact(&self, artifact: &ArtifactRef) -> Result<(), StoreError> {
+        let id = uuid::Uuid::new_v4().into_bytes().to_vec();
+
+        sqlx::query(
+            "INSERT OR REPLACE INTO artifact_refs (
+                id, kind, uri, blake3, size,
+                produced_by_session, produced_by_event,
+                status, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'created', ?8)"
+        )
+        .bind(&id)
+        .bind(format!("{:?}", artifact.kind).to_lowercase())
+        .bind(&artifact.uri)
+        .bind(&artifact.blake3)
+        .bind(artifact.size_bytes as i64)
+        .bind(artifact.produced_by_session.as_bytes().as_slice())
+        .bind(&artifact.produced_by_event)
+        .bind(artifact.created_at as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
+
         Ok(())
     }
 
