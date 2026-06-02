@@ -84,10 +84,22 @@ impl LlmProxy {
             });
         }
 
-        // Simulate API call (in production, this calls OpenAI/Anthropic API)
+        // Call real LLM API (falls back to simulation if keys not configured)
         let start = now_millis();
-        let response = self.simulate_api_call(&request).await?;
-        let latency = now_millis() - start;
+        let mut response = match self.call_real_api(&request).await {
+            Ok(resp) => resp,
+            Err(ProxyError::ApiError(msg)) if
+                msg.contains("not set") => {
+                tracing::warn!(
+                    target = "nexus.llm_proxy",
+                    reason = %msg,
+                    "Falling back to simulated API call"
+                );
+                self.simulate_api_call(&request).await?
+            }
+            Err(e) => return Err(e),
+        };
+        response.latency_ms = now_millis() - start;
 
         let _response_hash = compute_hash(response.content.as_bytes());
 
@@ -111,7 +123,7 @@ impl LlmProxy {
             tokens_in = %response.input_tokens,
             tokens_out = %response.output_tokens,
             cost_cents = %response.cost_cents,
-            latency_ms = %latency,
+            latency_ms = %response.latency_ms,
             cached = false,
             "LLM call proxied"
         );
@@ -135,6 +147,167 @@ impl LlmProxy {
             response_hash: compute_hash(b"simulated_response"),
             latency_ms: 200,
         })
+    }
+
+    /// Real API call routed by model prefix: gpt → OpenAI, claude → Anthropic.
+    async fn call_real_api(&self, request: &LlmRequest) -> Result<LlmResponse, ProxyError> {
+        let model_lower = request.model.to_lowercase();
+
+        if model_lower.contains("claude") {
+            self.call_anthropic_api(request).await
+        } else if model_lower.starts_with("gpt") || model_lower.starts_with("o1") || model_lower.starts_with("o3") {
+            self.call_openai_api(request).await
+        } else {
+            Err(ProxyError::ModelNotAvailable(request.model.clone()))
+        }
+    }
+
+    async fn call_openai_api(&self, request: &LlmRequest) -> Result<LlmResponse, ProxyError> {
+        let api_key = std::env::var("OPENAI_API_KEY")
+            .map_err(|_| ProxyError::ApiError("OPENAI_API_KEY not set".into()))?;
+
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "model": request.model,
+            "messages": [
+                {"role": "user", "content": request.prompt}
+            ],
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+        });
+
+        let resp = client
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProxyError::ApiError(format!("OpenAI request failed: {}", e)))?;
+
+        if resp.status() == 429 {
+            return Err(ProxyError::RateLimited);
+        }
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ProxyError::ApiError(format!("OpenAI HTTP {}: {}", status, text)));
+        }
+
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| ProxyError::ApiError(format!("OpenAI response parse: {}", e)))?;
+
+        let content = data["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let input_tokens = data["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
+        let output_tokens = data["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+        let cost_cents = self.estimate_openai_cost(&request.model, input_tokens, output_tokens);
+
+        let response_hash = compute_hash(content.as_bytes());
+
+        Ok(LlmResponse {
+            request_id: request.request_id.clone(),
+            model: request.model.clone(),
+            content,
+            input_tokens,
+            output_tokens,
+            cost_cents,
+            response_hash,
+            latency_ms: 0,
+        })
+    }
+
+    async fn call_anthropic_api(&self, request: &LlmRequest) -> Result<LlmResponse, ProxyError> {
+        let api_key = std::env::var("ANTHROPIC_API_KEY")
+            .map_err(|_| ProxyError::ApiError("ANTHROPIC_API_KEY not set".into()))?;
+
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "model": request.model,
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+            "messages": [
+                {"role": "user", "content": request.prompt}
+            ],
+        });
+
+        let resp = client
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", &api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProxyError::ApiError(format!("Anthropic request failed: {}", e)))?;
+
+        if resp.status() == 429 {
+            return Err(ProxyError::RateLimited);
+        }
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ProxyError::ApiError(format!("Anthropic HTTP {}: {}", status, text)));
+        }
+
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| ProxyError::ApiError(format!("Anthropic response parse: {}", e)))?;
+
+        let content = data["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let input_tokens = data["usage"]["input_tokens"].as_u64().unwrap_or(0);
+        let output_tokens = data["usage"]["output_tokens"].as_u64().unwrap_or(0);
+        let cost_cents = self.estimate_claude_cost(&request.model, input_tokens, output_tokens);
+
+        let response_hash = compute_hash(content.as_bytes());
+
+        Ok(LlmResponse {
+            request_id: request.request_id.clone(),
+            model: request.model.clone(),
+            content,
+            input_tokens,
+            output_tokens,
+            cost_cents,
+            response_hash,
+            latency_ms: 0,
+        })
+    }
+
+    fn estimate_openai_cost(&self, model: &str, input_tokens: u64, output_tokens: u64) -> u64 {
+        let (input_per_1m, output_per_1m): (f64, f64) = match model {
+            m if m.starts_with("gpt-4o") => (2.50, 10.00),
+            m if m.starts_with("gpt-4-turbo") => (10.00, 30.00),
+            m if m.starts_with("gpt-4") => (30.00, 60.00),
+            m if m.starts_with("gpt-3.5") => (0.50, 1.50),
+            m if m.starts_with("o1") => (15.00, 60.00),
+            m if m.starts_with("o3") => (10.00, 40.00),
+            _ => (2.50, 10.00),
+        };
+        let cost = (input_tokens as f64 / 1_000_000.0) * input_per_1m
+            + (output_tokens as f64 / 1_000_000.0) * output_per_1m;
+        (cost * 100.0).ceil() as u64
+    }
+
+    fn estimate_claude_cost(&self, model: &str, input_tokens: u64, output_tokens: u64) -> u64 {
+        let (input_per_1m, output_per_1m): (f64, f64) = match model {
+            m if m.contains("claude-3-5") || m.contains("claude-3.5") => (3.00, 15.00),
+            m if m.contains("claude-3-opus") => (15.00, 75.00),
+            m if m.contains("claude-3") => (3.00, 15.00),
+            _ => (3.00, 15.00),
+        };
+        let cost = (input_tokens as f64 / 1_000_000.0) * input_per_1m
+            + (output_tokens as f64 / 1_000_000.0) * output_per_1m;
+        (cost * 100.0).ceil() as u64
     }
 
     fn estimate_cost(&self, model: &str, tokens: u64) -> u64 {
