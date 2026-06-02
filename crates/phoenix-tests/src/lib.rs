@@ -398,12 +398,12 @@ mod tests {
 #[cfg(test)]
 mod integration {
     use super::*;
-    use nexus_core::*;
-    use nexus_core::event::*;
-    use nexus_core::recovery::*;
-    use nexus_core::effects::*;
+    
+    
+    
+    
     use nexus_core::export::SessionExport;
-    use nexus_core::entropy::*;
+    
     use nexus_event_store::*;
     use std::collections::BTreeMap;
 
@@ -421,8 +421,6 @@ mod integration {
         let sid = SessionId::from_bytes([0xE2, 0xE2, 0,0,0,0,0,0,0,0,0,0,0,0,0,0]);
 
         // Phase 1: Intake
-        let mut seq = 0u64;
-        seq += 1;
         let mut cv = CausalVector::new();
         cv.increment(sid);
         store.append_event(&NexusEvent::new(
@@ -430,28 +428,24 @@ mod integration {
             sid, cv.clone(), None,
         )).await.unwrap();
 
-        seq += 1;
         cv.increment(sid);
         store.append_event(&NexusEvent::new(
             EventType::IntentParsed { intent_graph: IntentGraph::default() },
             sid, cv.clone(), None,
         )).await.unwrap();
 
-        seq += 1;
         cv.increment(sid);
         store.append_event(&NexusEvent::new(
             EventType::PlanCommitted { frontier: Frontier::empty() },
             sid, cv.clone(), None,
         )).await.unwrap();
 
-        seq += 1;
         cv.increment(sid);
         store.append_event(&NexusEvent::new(
             EventType::DependenciesMet, sid, cv.clone(), None,
         )).await.unwrap();
 
         // Phase 2: Execution with checkpoints
-        seq += 1;
         cv.increment(sid);
         store.append_event(&NexusEvent::new(
             EventType::WorkerCheckpoint {
@@ -463,7 +457,6 @@ mod integration {
             sid, cv.clone(), None,
         )).await.unwrap();
 
-        seq += 1;
         cv.increment(sid);
         store.append_event(&NexusEvent::new(
             EventType::WorkerCheckpoint {
@@ -656,7 +649,7 @@ mod integration {
         });
 
         // Export from A
-        let mut cv_a = CausalVector::singleton(sid_a, 5);
+        let cv_a = CausalVector::singleton(sid_a, 5);
         let export = SessionExport::from_session(&[], sid_a, mem_a, cv_a.clone());
 
         // Session B inherits
@@ -702,7 +695,7 @@ mod integration {
     async fn e2e_causal_vector_cross_node_merge() {
         let sid_a = SessionId::from_bytes([0xA1; 16]);
         let sid_b = SessionId::from_bytes([0xB1; 16]);
-        let sid_c = SessionId::from_bytes([0xC1; 16]);
+        let _sid_c = SessionId::from_bytes([0xC1; 16]);
 
         // Node A: 5 events
         let mut cv_a = CausalVector::new();
@@ -726,11 +719,11 @@ mod integration {
 #[cfg(test)]
 mod kill_tests {
     use super::*;
-    use nexus_core::*;
-    use nexus_core::event::*;
-    use nexus_core::llm_proxy::*;
-    use nexus_core::vault::*;
-    use nexus_core::worker_spawner::*;
+    
+    
+    
+    
+    
     use nexus_event_store::*;
     use std::collections::BTreeMap;
 
@@ -843,7 +836,7 @@ mod kill_tests {
         assert!(recovered.recovery_plan.is_some(), "Should have recovery plan");
 
         // Verify LLM not re-called (no PlanProposed events)
-        let has_llm_event = events.iter().any(|e| {
+        let _has_llm_event = events.iter().any(|e| {
             matches!(e.event_type, EventType::PlanProposed { .. })
         });
         // In a real scenario, there would be PlanProposed events from earlier.
@@ -948,7 +941,7 @@ mod kill_tests {
 
         // Commit
         let id = uuid::Uuid::new_v4().into_bytes().to_vec();
-        let result = store.commit_side_effect(&id, "resp_hash_full").await;
+        let _result = store.commit_side_effect(&id, "resp_hash_full").await;
         // May fail due to UUID mismatch between intent and commit; that's expected
         // In production, the Kernel tracks the exact DB id
 

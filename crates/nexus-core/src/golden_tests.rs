@@ -2,8 +2,8 @@
 #[cfg(test)]
 mod golden_tests {
     use crate::*;
-    use crate::event::*;
-    use crate::protocol::*;
+    
+    
     use std::collections::BTreeMap;
 
     const GOLDEN_CHECKPOINT_V0: &[u8] = include_bytes!("../../../fixtures/checkpoint_v0.msgpack");

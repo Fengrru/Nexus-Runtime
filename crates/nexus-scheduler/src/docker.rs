@@ -101,7 +101,7 @@ impl DockerScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SchedulerTask, CapabilityMode, RequiredCapability};
+    use crate::SchedulerTask;
 
     #[test]
     fn test_docker_scheduler_dispatches_tasks() {

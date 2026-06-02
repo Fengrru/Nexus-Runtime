@@ -311,7 +311,7 @@ mod tests {
         let sid = SessionId::from_bytes([1u8; 16]);
         let state = NexusState::new(sid, now_millis());
 
-        let mut cv = CausalVector::new();
+        let _cv = CausalVector::new();
         let event = NexusEvent::new(
             EventType::IntentReceived {
                 raw_input: "migration test".into(),
