@@ -13,7 +13,9 @@ Protocol:
 import sys
 import json
 import time
+import os
 import hashlib
+import subprocess
 import traceback
 from typing import Any, Dict, List, Optional
 
@@ -125,81 +127,142 @@ class WorkerProtocol:
             return {"error": str(e)}
 
     def execute_intent(self, intent: Dict, inputs: List[Dict]) -> Dict[str, Any]:
-        """Execute the actual intent. Override this for custom behavior."""
+        """Execute an intent — either a single action or a multi-step plan."""
         action_type = intent.get("action_type", "")
         target = intent.get("target", "")
         params = intent.get("parameters", {})
 
+        # Multi-step plan: LLM generates a JSON plan, worker executes each step
+        if action_type == "execute_plan":
+            plan_json = params.get("plan", "")
+            if plan_json:
+                return self._execute_plan(plan_json)
+            return {"error": "execute_plan requires a 'plan' parameter"}
+
+        # Single action (backward compatible)
         artifacts = []
         start_time = time.time()
 
-        # Dispatch based on action type
+        result = self._dispatch_action(action_type, target, params)
+        if "error" in result:
+            return result
+        if "artifact" in result:
+            artifacts.append(result["artifact"])
+        self.step_index += 1
+        self.send_checkpoint(self.step_index, [{"type": action_type, "path": target}],
+                             50)
+
+        duration_ms = int((time.time() - start_time) * 1000)
+        self.send_checkpoint(self.step_index + 1, [{"type": "completed", "path": target}], 100)
+
+        return {
+            "status": "completed",
+            "artifacts": artifacts,
+            "metrics": {"duration_ms": duration_ms, "tokens_consumed": 0, "cost_cents": 0}
+        }
+
+    def _execute_plan(self, plan_json: str) -> Dict[str, Any]:
+        """Execute a multi-step plan. Each step is: {action_type, target, parameters}."""
+        steps = json.loads(plan_json)
+        if not isinstance(steps, list):
+            return {"error": "Plan must be a JSON array of steps"}
+
+        self.log(f"Executing plan with {len(steps)} steps")
+        artifacts = []
+        start_time = time.time()
+        total_steps = len(steps)
+
+        for i, step in enumerate(steps):
+            action_type = step.get("action_type", "")
+            target = step.get("target", "")
+            params = step.get("parameters", {})
+
+            self.log(f"  Step {i+1}/{total_steps}: {action_type} -> {target}")
+            result = self._dispatch_action(action_type, target, params)
+
+            if "error" in result:
+                progress_pct = int((i / total_steps) * 100)
+                self.send_checkpoint(
+                    self.step_index + i + 1,
+                    [{"type": action_type, "path": target, "error": result["error"]}],
+                    progress_pct,
+                )
+                return {"error": f"Step {i+1} failed: {result['error']}"}
+
+            if "artifact" in result:
+                artifacts.append(result["artifact"])
+
+            progress_pct = int(((i + 1) / total_steps) * 100)
+            self.send_checkpoint(
+                self.step_index + i + 1,
+                [{"type": action_type, "path": target}],
+                progress_pct,
+            )
+
+        self.step_index += total_steps
+        duration_ms = int((time.time() - start_time) * 1000)
+        self.send_checkpoint(self.step_index + 1, [], 100)
+
+        return {
+            "status": "completed",
+            "artifacts": artifacts,
+            "metrics": {"duration_ms": duration_ms, "tokens_consumed": 0, "cost_cents": 0}
+        }
+
+    def _dispatch_action(self, action_type: str, target: str, params: Dict) -> Dict:
+        """Execute a single action, returning {error: ...} or {artifact: ...}."""
         if action_type == "read_file":
             try:
-                with open(target, "r") as f:
+                with open(target, "r", encoding="utf-8") as f:
                     content = f.read()
-                artifacts.append(self._create_artifact("file", target, content))
-                self.step_index += 1
-                self.send_checkpoint(self.step_index, [{"type": "read_file", "path": target}], 50)
+                return {"artifact": self._create_artifact("file", target, content)}
             except FileNotFoundError:
                 return {"error": f"File not found: {target}"}
 
         elif action_type == "write_file":
             content = params.get("content", "")
             try:
-                with open(target, "w") as f:
+                os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+                with open(target, "w", encoding="utf-8") as f:
                     f.write(content)
-                artifacts.append(self._create_artifact("file", target, content))
-                self.step_index += 1
-                self.send_checkpoint(self.step_index, [{"type": "write_file", "path": target}], 50)
+                return {"artifact": self._create_artifact("file", target, content)}
             except Exception as e:
                 return {"error": f"Write failed: {e}"}
 
         elif action_type == "grep":
             pattern = params.get("pattern", "")
             try:
-                with open(target, "r") as f:
+                with open(target, "r", encoding="utf-8") as f:
                     lines = f.readlines()
                 matches = [line.rstrip() for line in lines if pattern in line]
                 result_text = "\n".join(matches)
-                artifacts.append(self._create_artifact("text", target, result_text))
-                self.step_index += 1
-                self.send_checkpoint(self.step_index, [{"type": "grep", "path": target}], 50)
+                return {"artifact": self._create_artifact("text", target, result_text)}
             except FileNotFoundError:
                 return {"error": f"File not found: {target}"}
 
         elif action_type == "run_command":
-            import subprocess
             cmd = params.get("command", target)
             try:
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+                result = subprocess.run(
+                    cmd, shell=True, capture_output=True, text=True, timeout=60
+                )
                 output = result.stdout + result.stderr
-                artifacts.append(self._create_artifact("log", f"cmd:{cmd}", output))
-                self.step_index += 1
-                self.send_checkpoint(self.step_index, [{"type": "run_command", "path": cmd}], 50)
+                return {"artifact": self._create_artifact("log", f"cmd:{cmd}", output)}
             except subprocess.TimeoutExpired:
                 return {"error": f"Command timed out: {cmd}"}
             except Exception as e:
                 return {"error": f"Command failed: {e}"}
 
+        elif action_type == "mkdir":
+            try:
+                os.makedirs(target, exist_ok=True)
+                return {"artifact": self._create_artifact("text", target, f"Created: {target}")}
+            except Exception as e:
+                return {"error": f"Mkdir failed: {e}"}
+
         else:
             self.log(f"Unknown action type: {action_type}, treating as no-op")
-            self.step_index += 1
-            self.send_checkpoint(self.step_index, [{"type": action_type, "path": target}], 50)
-
-        duration_ms = int((time.time() - start_time) * 1000)
-
-        self.send_checkpoint(self.step_index + 1, [{"type": "completed", "path": target}], 100)
-
-        return {
-            "status": "completed",
-            "artifacts": artifacts,
-            "metrics": {
-                "duration_ms": duration_ms,
-                "tokens_consumed": 0,
-                "cost_cents": 0
-            }
-        }
+            return {"artifact": self._create_artifact("text", target, f"No-op: {action_type}")}
 
     def _create_artifact(self, kind: str, path: str, content: str) -> Dict:
         """Create an artifact reference from content."""

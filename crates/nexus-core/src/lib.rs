@@ -1,3 +1,5 @@
+#![deny(clippy::disallowed_types)]
+
 pub mod types;
 pub mod event;
 pub mod protocol;

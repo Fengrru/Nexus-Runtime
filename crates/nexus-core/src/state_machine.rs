@@ -71,6 +71,11 @@ pub fn transition(
             Ok(next)
         }
 
+        (SessionStatus::Planning, EventType::PlanProposed { .. }) => {
+            next.causal_vector.increment(current.session_id);
+            Ok(next)
+        }
+
         (SessionStatus::Planning, EventType::PlanRejected { .. }) => {
             next.status = SessionStatus::Failed;
             next.causal_vector.increment(current.session_id);
@@ -313,7 +318,7 @@ fn merge_memory_refs(current: &[MemoryRef], delta: &[MemoryDelta]) -> Vec<Memory
             }
         }
     }
-    result.sort_by(|a, b| b.importance_score.cmp(&a.importance_score));
+    result.sort_by_key(|m| std::cmp::Reverse(m.importance_score));
     result
 }
 

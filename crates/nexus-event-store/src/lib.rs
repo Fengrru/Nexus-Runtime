@@ -1,3 +1,5 @@
+#![deny(clippy::disallowed_types)]
+
 pub mod store;
 pub mod sqlite;
 pub mod postgres;

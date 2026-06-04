@@ -116,7 +116,7 @@ impl MemoryGraph {
         queue.push_back((from.to_string(), 0));
 
         while let Some((current, distance)) = queue.pop_front() {
-            if &current == to {
+            if current == to {
                 return distance;
             }
             if visited.contains(&current) {
@@ -142,11 +142,8 @@ impl MemoryGraph {
         let mut imported = Vec::new();
 
         for (id, node) in &source.nodes {
-            match node.causal_context.compare(causal_vector) {
-                CausalRelation::Concurrent => {
-                    continue;
-                }
-                _ => {}
+            if node.causal_context.compare(causal_vector) == CausalRelation::Concurrent {
+                continue;
             }
 
             let mut new_node = node.clone();
@@ -191,5 +188,5 @@ fn cosine_similarity_u8(a: &[u8], b: &[u8]) -> u64 {
     }
 
     let sim = dot / (norm_a.sqrt() * norm_b.sqrt());
-    ((sim.max(-1.0).min(1.0) + 1.0) * 5000.0) as u64
+    ((sim.clamp(-1.0, 1.0) + 1.0) * 5000.0) as u64
 }

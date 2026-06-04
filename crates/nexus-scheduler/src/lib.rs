@@ -1,3 +1,5 @@
+#![deny(clippy::disallowed_types)]
+
 use nexus_core::TaskId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

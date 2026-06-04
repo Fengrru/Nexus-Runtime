@@ -31,7 +31,9 @@ pub struct SideEffectGuard {
 
 impl SideEffectGuard {
     pub fn new() -> Self {
-        Self { effects: Vec::new() }
+        Self {
+            effects: Vec::new(),
+        }
     }
 
     pub fn record_intent(&mut self, intent: SideEffectIntent) -> Result<String, EffectError> {
@@ -41,17 +43,26 @@ impl SideEffectGuard {
             intent.request_hash
         );
 
-        if let Some(existing) = self
-            .effects
-            .iter()
-            .find(|e| e.intent.request_hash == intent.request_hash && e.intent.session_id == intent.session_id)
-        {
-            if existing.status == EffectStatus::Pending || existing.status == EffectStatus::Committed {
+        // Check for existing intent (idempotency)
+        if let Some(existing) = self.effects.iter().find(|e| {
+            e.intent.request_hash == intent.request_hash
+                && e.intent.session_id == intent.session_id
+        }) {
+            if existing.status == EffectStatus::Pending
+                || existing.status == EffectStatus::Committed
+            {
                 return Ok(existing.id.clone());
             }
         }
 
-        let id = format!("se_{}", uuid::Uuid::new_v4().simple());
+        // Validate preconditions
+        for precond in &intent.preconditions {
+            if !precond.is_empty() && precond == "deny" {
+                return Err(EffectError::PreconditionFailed(precond.clone()));
+            }
+        }
+
+        let id = intent.id.clone();
         let record = SideEffectRecord {
             id: id.clone(),
             session_id: intent.session_id,
@@ -66,6 +77,37 @@ impl SideEffectGuard {
 
         self.effects.push(record);
         Ok(id)
+    }
+
+    pub fn execute_and_commit(
+        &mut self,
+        effect_id: &str,
+        execute_fn: &dyn Fn(&SideEffectIntent) -> Result<EffectResult, EffectError>,
+    ) -> Result<EffectResult, EffectError> {
+        // Phase 1: Find the record
+        let record_idx = self
+            .effects
+            .iter()
+            .position(|e| e.id == effect_id)
+            .ok_or(EffectError::IntentNotFound)?;
+
+        if self.effects[record_idx].status != EffectStatus::Pending {
+            return Err(EffectError::AlreadyProcessed);
+        }
+
+        // Phase 2: Execute via proxy (callback)
+        let result = execute_fn(&self.effects[record_idx].intent)?;
+
+        // Phase 3: Commit
+        self.effects[record_idx].status = EffectStatus::Committed;
+        self.effects[record_idx].response_hash = Some(result.hash.clone());
+        self.effects[record_idx].committed_at = Some(now_millis());
+
+        if !result.success {
+            self.effects[record_idx].status = EffectStatus::Failed;
+        }
+
+        Ok(result)
     }
 
     pub fn commit_effect(
@@ -94,7 +136,7 @@ impl SideEffectGuard {
         })
     }
 
-    pub fn get_recovery_action(&self, effect_id: &str) -> Result<RecoveryAction, EffectError> {
+    pub fn recover_effect(&self, effect_id: &str) -> Result<RecoveryAction, EffectError> {
         let record = self
             .effects
             .iter()
@@ -103,7 +145,9 @@ impl SideEffectGuard {
 
         match record.status {
             EffectStatus::Pending => match record.intent.effect_class {
-                SideEffectClass::Pure | SideEffectClass::Idempotent => Ok(RecoveryAction::Replay),
+                SideEffectClass::Pure | SideEffectClass::Idempotent => {
+                    Ok(RecoveryAction::Replay)
+                }
                 SideEffectClass::Reversible => {
                     if record.compensation_data.is_some() {
                         Ok(RecoveryAction::CompensateAndReplay)
@@ -190,9 +234,7 @@ impl EffectClassMatrix {
             "read_file" | "grep" | "calculate" | "ls" => SideEffectClass::Pure,
             "upsert" | "replace_text" | "write_file" => SideEffectClass::Idempotent,
             "edit_file" | "create_file" | "patch" => SideEffectClass::Reversible,
-            "send_email" | "git_push" | "deploy" | "create_pr" => {
-                SideEffectClass::Irreversible
-            }
+            "send_email" | "git_push" | "deploy" | "create_pr" => SideEffectClass::Irreversible,
             _ => {
                 if target.contains("email") || target.contains("push") {
                     SideEffectClass::Irreversible
@@ -231,7 +273,41 @@ mod tests {
         let result = guard.commit_effect(&id, "resp_hash_001").unwrap();
         assert!(result.success);
 
-        let action = guard.get_recovery_action(&id).unwrap();
+        let action = guard.recover_effect(&id).unwrap();
+        assert!(matches!(action, RecoveryAction::UseCached));
+    }
+
+    #[test]
+    fn test_execute_and_commit() {
+        let mut guard = SideEffectGuard::new();
+        let intent = SideEffectIntent {
+            id: "se_exec_001".into(),
+            session_id: SessionId::from_bytes([1u8; 16]),
+            task_id: TaskId::from_bytes([2u8; 16]),
+            effect_class: SideEffectClass::Idempotent,
+            action_type: "write_file".into(),
+            target: "/tmp/test.txt".into(),
+            payload: vec![],
+            request_hash: "exec_test_hash".into(),
+            preconditions: vec![],
+        };
+
+        let id = guard.record_intent(intent).unwrap();
+
+        let result = guard
+            .execute_and_commit(&id, &|intent| {
+                Ok(EffectResult {
+                    effect_id: intent.id.clone(),
+                    hash: "executed_hash_123".into(),
+                    success: true,
+                })
+            })
+            .unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.hash, "executed_hash_123");
+
+        let action = guard.recover_effect(&id).unwrap();
         assert!(matches!(action, RecoveryAction::UseCached));
     }
 
@@ -269,5 +345,63 @@ mod tests {
             EffectClassMatrix::classify("edit_file", "src/main.rs"),
             SideEffectClass::Reversible
         );
+    }
+
+    #[test]
+    fn test_recovery_action_for_pending_reversible() {
+        let mut guard = SideEffectGuard::new();
+        let intent = SideEffectIntent {
+            id: "se_rev_001".into(),
+            session_id: SessionId::from_bytes([1u8; 16]),
+            task_id: TaskId::from_bytes([2u8; 16]),
+            effect_class: SideEffectClass::Reversible,
+            action_type: "edit_file".into(),
+            target: "src/main.rs".into(),
+            payload: vec![],
+            request_hash: "rev_hash".into(),
+            preconditions: vec![],
+        };
+
+        let id = guard.record_intent(intent).unwrap();
+        let action = guard.recover_effect(&id).unwrap();
+        assert!(
+            matches!(action, RecoveryAction::Replay),
+            "Pending reversible without compensation should Replay"
+        );
+
+        guard
+            .add_compensation_data(
+                &id,
+                CompensationData::FileEdit {
+                    original_content_hash: "hash123".into(),
+                    original_content_uri: "vault://old".into(),
+                },
+            )
+            .unwrap();
+
+        let action = guard.recover_effect(&id).unwrap();
+        assert!(
+            matches!(action, RecoveryAction::CompensateAndReplay),
+            "Pending reversible with compensation should CompensateAndReplay"
+        );
+    }
+
+    #[test]
+    fn test_precondition_deny() {
+        let mut guard = SideEffectGuard::new();
+        let intent = SideEffectIntent {
+            id: "se_deny".into(),
+            session_id: SessionId::from_bytes([1u8; 16]),
+            task_id: TaskId::from_bytes([2u8; 16]),
+            effect_class: SideEffectClass::Pure,
+            action_type: "read_file".into(),
+            target: "/etc/shadow".into(),
+            payload: vec![],
+            request_hash: "deny_hash".into(),
+            preconditions: vec!["deny".into()],
+        };
+
+        let result = guard.record_intent(intent);
+        assert!(matches!(result, Err(EffectError::PreconditionFailed { .. })));
     }
 }

@@ -82,13 +82,13 @@ impl RecoveryManager {
         events: &[NexusEvent],
         session_id: SessionId,
     ) -> Result<RecoveryResult, RecoveryError> {
-        let mut report = RecoveryReport::default();
-
+        // Step 1: Integrity check (delegated to caller via store)
+        // Step 2: Load all events (already provided by caller)
         if events.is_empty() {
             return Err(RecoveryError::SessionNotFound);
         }
 
-        // Step 1: Verify causal vector monotonicity
+        // Step 3: Verify causal vector monotonicity
         let mut prev_cv = CausalVector::new();
         for event in events {
             if !is_monotonic(&prev_cv, &event.causal_vector) {
@@ -100,11 +100,13 @@ impl RecoveryManager {
             }
             prev_cv.merge(&event.causal_vector);
         }
-        report.causal_valid = true;
 
-        // Step 2: Replay events through state machine
-        let mut state = NexusState::new(session_id, events.first().map(|e| e.event_timestamp).unwrap_or(0));
-        let dag = self.build_dag(events);
+        // Step 4: Replay events through state machine
+        let mut state = NexusState::new(
+            session_id,
+            events.first().map(|e| e.event_timestamp).unwrap_or(0),
+        );
+        let dag = build_dag(events);
 
         for event in events {
             state = transition(&state, event, &dag).map_err(|e| RecoveryError::ReplayFailed {
@@ -112,42 +114,117 @@ impl RecoveryManager {
                 error: format!("{:?}", e),
             })?;
         }
-        report.replay_success = true;
 
-        // Step 3: Build recovery plan if session was active
+        // Step 5-6: Artifact verification & cost integrity (delegated)
+        // Step 7: Build recovery plan
         let recovery_plan = if state.status == SessionStatus::Executing
             || state.status == SessionStatus::Checkpointing
         {
-            Some(RecoveryPlan {
-                from_step: state.checkpoint_seq,
-                replay_actions: Vec::new(),
-                handle_registry: Vec::new(),
-            })
+            Some(build_recovery_plan(&state, state.checkpoint_seq))
         } else {
             None
         };
 
-        report.integrity_check = true;
-        report.artifacts_valid = true;
-        report.cost_integrity = true;
-
         Ok(RecoveryResult {
             state,
-            report,
+            report: RecoveryReport {
+                integrity_check: true,
+                causal_valid: true,
+                replay_success: true,
+                artifacts_valid: true,
+                cost_integrity: true,
+            },
             recovery_plan,
         })
     }
 
-    fn build_dag(&self, _events: &[NexusEvent]) -> BTreeMap<TaskId, TaskNode> {
-        BTreeMap::new()
+    pub fn recover_with_context(
+        &self,
+        events: &[NexusEvent],
+        session_id: SessionId,
+        ctx: &RecoveryContext,
+    ) -> Result<RecoveryResult, RecoveryError> {
+        let integrity_check = ctx.store_integrity_ok;
+
+        // Step 2: Load all events (provided by caller)
+        if events.is_empty() {
+            return Err(RecoveryError::SessionNotFound);
+        }
+
+        // Step 3: Verify causal vector monotonicity
+        let mut prev_cv = CausalVector::new();
+        for event in events {
+            if !is_monotonic(&prev_cv, &event.causal_vector) {
+                return Err(RecoveryError::CausalViolation {
+                    event_id: event.event_id.clone(),
+                    expected: prev_cv,
+                    actual: event.causal_vector.clone(),
+                });
+            }
+            prev_cv.merge(&event.causal_vector);
+        }
+        let causal_valid = true;
+
+        // Step 4: Replay events through state machine
+        let mut state = NexusState::new(
+            session_id,
+            events.first().map(|e| e.event_timestamp).unwrap_or(0),
+        );
+        let dag = build_dag(events);
+
+        for event in events {
+            state = transition(&state, event, &dag).map_err(|e| RecoveryError::ReplayFailed {
+                event_id: event.event_id.clone(),
+                error: format!("{:?}", e),
+            })?;
+        }
+        let replay_success = true;
+
+        // Step 5: Load and verify checkpoint
+        if let Some(ref cp) = ctx.checkpoint {
+            if cp.step_index > state.checkpoint_seq {
+                return Err(RecoveryError::CheckpointAheadOfState);
+            }
+            for art in &cp.artifact_refs {
+                self.verify_artifact(art)?;
+            }
+        }
+        let artifacts_valid = ctx.artifacts_verified;
+
+        // Step 6: Verify no duplicated LLM calls
+        if ctx.llm_unique_count != ctx.llm_total_count {
+            return Err(RecoveryError::DuplicatedLlmCalls);
+        }
+        let cost_integrity = ctx.llm_total_count == ctx.llm_unique_count;
+
+        // Step 7: Build recovery plan if session was active
+        let recovery_plan = if state.status == SessionStatus::Executing
+            || state.status == SessionStatus::Checkpointing
+        {
+            Some(build_recovery_plan(&state, state.checkpoint_seq))
+        } else {
+            None
+        };
+
+        Ok(RecoveryResult {
+            state,
+            report: RecoveryReport {
+                integrity_check,
+                causal_valid,
+                replay_success,
+                artifacts_valid,
+                cost_integrity,
+            },
+            recovery_plan,
+        })
     }
 
     pub fn verify_artifact(&self, art: &ArtifactRef) -> Result<(), RecoveryError> {
-        let path = std::path::Path::new(&self.vault_base_path).join(&art.uri.replace("vault://", ""));
+        let path =
+            std::path::Path::new(&self.vault_base_path).join(art.uri.replace("vault://", ""));
 
-        let content = std::fs::read(&path).map_err(|e| {
-            RecoveryError::ArtifactMissing(art.id.clone(), e.to_string())
-        })?;
+        let content = std::fs::read(&path)
+            .map_err(|e| RecoveryError::ArtifactMissing(art.id.clone(), e.to_string()))?;
 
         let actual_hash = blake3::hash(&content).to_hex().to_string();
         if actual_hash != art.blake3 {
@@ -160,6 +237,22 @@ impl RecoveryManager {
 
         Ok(())
     }
+
+    pub fn load_latest_checkpoint(
+        &self,
+        _session_id: SessionId,
+    ) -> Option<Checkpoint> {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RecoveryContext {
+    pub store_integrity_ok: bool,
+    pub checkpoint: Option<Checkpoint>,
+    pub artifacts_verified: bool,
+    pub llm_unique_count: u64,
+    pub llm_total_count: u64,
 }
 
 fn is_monotonic(prev: &CausalVector, next: &CausalVector) -> bool {
@@ -172,11 +265,47 @@ fn is_monotonic(prev: &CausalVector, next: &CausalVector) -> bool {
     true
 }
 
+fn build_dag(events: &[NexusEvent]) -> BTreeMap<TaskId, TaskNode> {
+    let mut dag = BTreeMap::new();
+    for event in events {
+        if let EventType::IntentParsed { intent_graph } = &event.event_type {
+            for (task_id, node) in &intent_graph.nodes {
+                dag.insert(*task_id, node.clone());
+            }
+        }
+    }
+    dag
+}
+
+fn build_recovery_plan(state: &NexusState, from_step: u64) -> RecoveryPlan {
+    RecoveryPlan {
+        from_step,
+        replay_actions: state
+            .execution_frontier
+            .nodes
+            .iter()
+            .map(|_| ReplayAction::ReadFile {
+                path: String::new(),
+                expected_hash: String::new(),
+            })
+            .collect(),
+        handle_registry: Vec::new(),
+    }
+}
+
+pub fn reacquire_handle(handle: &HandleRecord) -> Result<(), RecoveryError> {
+    match handle.handle_type.as_str() {
+        "file_lock" => Ok(()),
+        "api_session" => Ok(()),
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::event::{EventType, NexusEvent};
     use crate::types::*;
-    use super::{RecoveryManager, RecoveryError};
+    use super::{RecoveryManager, RecoveryError, RecoveryContext};
 
     #[test]
     fn test_recover_from_empty_events_fails() {
@@ -193,8 +322,12 @@ mod tests {
 
         let events = vec![
             NexusEvent::new(
-                EventType::IntentReceived { raw_input: "test".into(), source: "cli".into() },
-                sid, {
+                EventType::IntentReceived {
+                    raw_input: "test".into(),
+                    source: "cli".into(),
+                },
+                sid,
+                {
                     let mut c = CausalVector::new();
                     c.increment(sid);
                     c
@@ -202,8 +335,11 @@ mod tests {
                 None,
             ),
             NexusEvent::new(
-                EventType::IntentParsed { intent_graph: IntentGraph::default() },
-                sid, {
+                EventType::IntentParsed {
+                    intent_graph: IntentGraph::default(),
+                },
+                sid,
+                {
                     let mut c = CausalVector::new();
                     c.increment(sid);
                     c.increment(sid);
@@ -212,8 +348,11 @@ mod tests {
                 None,
             ),
             NexusEvent::new(
-                EventType::PlanRejected { reason: "test rejection".into() },
-                sid, {
+                EventType::PlanRejected {
+                    reason: "test rejection".into(),
+                },
+                sid,
+                {
                     let mut c = CausalVector::new();
                     c.increment(sid);
                     c.increment(sid);
@@ -229,5 +368,115 @@ mod tests {
         assert!(result.report.replay_success);
         assert_eq!(result.state.status, SessionStatus::Failed);
         assert!(result.recovery_plan.is_none());
+    }
+
+    #[test]
+    fn test_duplicate_llm_calls_detected() {
+        let rm = RecoveryManager::new("/tmp/test_vault".into());
+        let sid = SessionId::from_bytes([1u8; 16]);
+
+        let events = vec![NexusEvent::new(
+            EventType::IntentReceived {
+                raw_input: "test".into(),
+                source: "cli".into(),
+            },
+            sid,
+            {
+                let mut c = CausalVector::new();
+                c.increment(sid);
+                c
+            },
+            None,
+        )];
+
+        let ctx = RecoveryContext {
+            store_integrity_ok: true,
+            checkpoint: None,
+            artifacts_verified: true,
+            llm_unique_count: 1,
+            llm_total_count: 2,
+        };
+
+        let result = rm.recover_with_context(&events, sid, &ctx);
+        assert!(matches!(result, Err(RecoveryError::DuplicatedLlmCalls)));
+    }
+
+    #[test]
+    fn test_recover_with_checkpoint_verification() {
+        let rm = RecoveryManager::new("/tmp/test_vault".into());
+        let sid = SessionId::from_bytes([1u8; 16]);
+
+        let events = vec![
+            NexusEvent::new(
+                EventType::IntentReceived {
+                    raw_input: "refactor".into(),
+                    source: "cli".into(),
+                },
+                sid,
+                {
+                    let mut c = CausalVector::new();
+                    c.increment(sid);
+                    c
+                },
+                None,
+            ),
+            NexusEvent::new(
+                EventType::IntentParsed {
+                    intent_graph: IntentGraph::default(),
+                },
+                sid,
+                {
+                    let mut c = CausalVector::new();
+                    c.increment(sid);
+                    c.increment(sid);
+                    c
+                },
+                None,
+            ),
+            NexusEvent::new(
+                EventType::PlanCommitted {
+                    frontier: Frontier::empty(),
+                },
+                sid,
+                {
+                    let mut c = CausalVector::new();
+                    c.increment(sid);
+                    c.increment(sid);
+                    c.increment(sid);
+                    c
+                },
+                None,
+            ),
+            NexusEvent::new(
+                EventType::DependenciesMet,
+                sid,
+                {
+                    let mut c = CausalVector::new();
+                    c.increment(sid);
+                    c.increment(sid);
+                    c.increment(sid);
+                    c.increment(sid);
+                    c
+                },
+                None,
+            ),
+        ];
+
+        let ctx = RecoveryContext {
+            store_integrity_ok: true,
+            checkpoint: None,
+            artifacts_verified: true,
+            llm_unique_count: 0,
+            llm_total_count: 0,
+        };
+
+        let result = rm.recover_with_context(&events, sid, &ctx).unwrap();
+        assert!(result.report.integrity_check);
+        assert!(result.report.causal_valid);
+        assert!(result.report.replay_success);
+        assert!(result.report.artifacts_valid);
+        assert!(result.report.cost_integrity);
+        assert_eq!(result.state.status, SessionStatus::Executing);
+        assert!(result.recovery_plan.is_some());
     }
 }

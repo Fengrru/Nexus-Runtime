@@ -1,3 +1,5 @@
+#![deny(clippy::disallowed_types)]
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use nexus_core::*;

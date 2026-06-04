@@ -252,7 +252,7 @@ mod tests {
             .unwrap();
 
         assert!(!imported.is_empty());
-        assert!(target_memory.nodes.len() >= 1);
+        assert!(!target_memory.nodes.is_empty());
     }
 
     #[test]

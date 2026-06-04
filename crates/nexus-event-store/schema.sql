@@ -1,3 +1,11 @@
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+PRAGMA foreign_keys=ON;
+PRAGMA temp_store=MEMORY;
+PRAGMA mmap_size=268435456;
+PRAGMA page_size=4096;
+PRAGMA cache_size=-64000;
+
 CREATE TABLE IF NOT EXISTS events (
     event_id TEXT PRIMARY KEY,
     event_type TEXT NOT NULL,
@@ -28,7 +36,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     checkpoint_seq INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    latest_event_id TEXT NOT NULL
+    latest_event_id TEXT NOT NULL REFERENCES events(event_id)
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
@@ -36,7 +44,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE TABLE IF NOT EXISTS side_effects (
     id BLOB PRIMARY KEY,
     session_id BLOB NOT NULL,
-    event_id TEXT NOT NULL,
+    event_id TEXT NOT NULL REFERENCES events(event_id),
     idempotency_key TEXT NOT NULL,
     effect_class TEXT NOT NULL CHECK(effect_class IN ('PURE', 'IDEMPOTENT', 'REVERSIBLE', 'IRREVERSIBLE')),
     status TEXT NOT NULL CHECK(status IN ('PENDING', 'COMMITTED', 'COMPENSATED', 'FAILED')),
@@ -54,7 +62,7 @@ CREATE INDEX IF NOT EXISTS idx_side_effects_idempotency ON side_effects(idempote
 
 CREATE TABLE IF NOT EXISTS resource_locks (
     resource_id TEXT PRIMARY KEY,
-    owner_session BLOB NOT NULL,
+    owner_session BLOB NOT NULL REFERENCES sessions(session_id),
     owner_task BLOB,
     mode TEXT NOT NULL CHECK(mode IN ('EXCLUSIVE', 'SHARED')),
     acquired_at INTEGER NOT NULL,
@@ -68,7 +76,7 @@ CREATE INDEX IF NOT EXISTS idx_locks_expiry ON resource_locks(lease_expiry);
 CREATE TABLE IF NOT EXISTS llm_calls (
     request_id TEXT PRIMARY KEY,
     session_id BLOB NOT NULL,
-    event_id TEXT NOT NULL,
+    event_id TEXT NOT NULL REFERENCES events(event_id),
     model TEXT NOT NULL,
     prompt_hash TEXT NOT NULL,
     response_hash TEXT,
@@ -89,7 +97,7 @@ CREATE TABLE IF NOT EXISTS artifact_refs (
     blake3 TEXT NOT NULL,
     size INTEGER NOT NULL,
     produced_by_session BLOB NOT NULL,
-    produced_by_event TEXT NOT NULL,
+    produced_by_event TEXT NOT NULL REFERENCES events(event_id),
     status TEXT NOT NULL,
     created_at INTEGER NOT NULL
 ) STRICT;

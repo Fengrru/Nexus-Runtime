@@ -46,7 +46,7 @@ impl EventStore for PostgresEventStore {
         .bind(event.session_id.as_bytes().as_slice())
         .bind(&event.trace_id[..])
         .bind(&event.parent_event_id)
-        .bind(&event.causal_vector.to_canonical())
+        .bind(event.causal_vector.to_canonical())
         .bind(&payload_bytes)
         .bind(&event.payload_hash)
         .bind(event.event_timestamp as i64)
@@ -80,7 +80,7 @@ impl EventStore for PostgresEventStore {
         rows.into_iter()
             .map(|r| r.to_nexus_event())
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| StoreError::SerializationError(e))
+            .map_err(StoreError::SerializationError)
     }
 
     async fn get_event(&self, event_id: &str) -> Result<Option<NexusEvent>, StoreError> {
@@ -97,7 +97,7 @@ impl EventStore for PostgresEventStore {
 
         row.map(|r| r.to_nexus_event())
             .transpose()
-            .map_err(|e| StoreError::SerializationError(e))
+            .map_err(StoreError::SerializationError)
     }
 
     async fn get_state(&self, session_id: SessionId) -> Result<Option<NexusState>, StoreError> {
@@ -113,7 +113,7 @@ impl EventStore for PostgresEventStore {
 
         row.map(|r| r.to_nexus_state())
             .transpose()
-            .map_err(|e| StoreError::SerializationError(e))
+            .map_err(StoreError::SerializationError)
     }
 
     async fn update_state(
@@ -121,20 +121,36 @@ impl EventStore for PostgresEventStore {
         state: &NexusState,
         expected_version: u64,
     ) -> Result<bool, StoreError> {
+        let _intent_graph_bytes = rmp_serde::to_vec(&state.intent_graph)
+            .map_err(|e| StoreError::SerializationError(e.to_string()))?;
+        let _frontier_bytes = rmp_serde::to_vec(&state.execution_frontier)
+            .map_err(|e| StoreError::SerializationError(e.to_string()))?;
+        let _memory_refs_bytes = rmp_serde::to_vec(&state.memory_refs)
+            .map_err(|e| StoreError::SerializationError(e.to_string()))?;
+        let _budget_bytes = rmp_serde::to_vec(&state.budget)
+            .map_err(|e| StoreError::SerializationError(e.to_string()))?;
+
         let result = sqlx::query(
-            "UPDATE sessions SET
+            "INSERT INTO sessions (
+                session_id, version, status, intent_graph, execution_frontier,
+                memory_refs, budget, checkpoint_seq, created_at, updated_at, latest_event_id
+            ) VALUES ($1, $2, $3, $8, $9, $10, $11, $6, $4, $4, $5)
+            ON CONFLICT (session_id) DO UPDATE SET
                 version = $2, status = $3,
                 updated_at = $4, latest_event_id = $5,
-                checkpoint_seq = $6
-             WHERE session_id = $1 AND version = $7",
+                checkpoint_seq = $6",
         )
         .bind(state.session_id.as_bytes().as_slice())
         .bind(state.version as i64)
         .bind(format!("{:?}", state.status).to_lowercase())
-        .bind(state.last_activity_at as i64)
+        .bind(state.created_at as i64)
         .bind(&state.latest_event_id)
         .bind(state.checkpoint_seq as i64)
         .bind(expected_version as i64)
+        .bind(&_intent_graph_bytes)
+        .bind(&_frontier_bytes)
+        .bind(&_memory_refs_bytes)
+        .bind(&_budget_bytes)
         .execute(&self.pool)
         .await
         .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;

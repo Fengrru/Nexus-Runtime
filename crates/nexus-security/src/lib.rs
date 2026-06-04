@@ -1,3 +1,5 @@
+#![deny(clippy::disallowed_types)]
+
 use nexus_core::{SessionId, TaskId, now_millis};
 use serde::{Serialize, Deserialize};
 use std::fmt;
@@ -13,23 +15,25 @@ pub enum CapabilityScope {
     SystemExec { command_pattern: String },
 }
 
-impl CapabilityScope {
-    pub fn to_string(&self) -> String {
+impl std::fmt::Display for CapabilityScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CapabilityScope::FsRead { path } => format!("fs:read:{}", path),
-            CapabilityScope::FsWrite { path } => format!("fs:write:{}", path),
+            CapabilityScope::FsRead { path } => write!(f, "fs:read:{}", path),
+            CapabilityScope::FsWrite { path } => write!(f, "fs:write:{}", path),
             CapabilityScope::ToolCall { tool_name, action } => {
-                format!("tool:{}:{}", tool_name, action)
+                write!(f, "tool:{}:{}", tool_name, action)
             }
-            CapabilityScope::LlmInference { model } => format!("llm:{}", model),
-            CapabilityScope::NetworkRead { host } => format!("net:read:{}", host),
-            CapabilityScope::NetworkWrite { host } => format!("net:write:{}", host),
+            CapabilityScope::LlmInference { model } => write!(f, "llm:{}", model),
+            CapabilityScope::NetworkRead { host } => write!(f, "net:read:{}", host),
+            CapabilityScope::NetworkWrite { host } => write!(f, "net:write:{}", host),
             CapabilityScope::SystemExec { command_pattern } => {
-                format!("exec:{}", command_pattern)
+                write!(f, "exec:{}", command_pattern)
             }
         }
     }
+}
 
+impl CapabilityScope {
     pub fn from_string(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split(':').collect();
         match parts.as_slice() {
@@ -179,7 +183,7 @@ impl CapabilityToken {
         format!(
             "{}:{}:{}:{}:{}:{}",
             self.version,
-            self.scope.to_string(),
+            self.scope,
             hex::encode(self.session_id.0),
             hex::encode(self.task_id.0),
             self.expires_at,
@@ -290,7 +294,7 @@ mod tests {
         let key = b"test-signing-key-32-bytes-long!!";
         let sid = SessionId::from_bytes([1u8; 16]);
         let tid = TaskId::from_bytes([2u8; 16]);
-        let expires = now_millis() + 3600_000;
+        let expires = now_millis() + 3_600_000;
 
         let token = CapabilityToken::issue(
             key,
@@ -331,7 +335,7 @@ mod tests {
         let key2 = b"different-signing-key-32-bytes!!";
         let sid = SessionId::from_bytes([1u8; 16]);
         let tid = TaskId::from_bytes([2u8; 16]);
-        let expires = now_millis() + 3600_000;
+        let expires = now_millis() + 3_600_000;
 
         let token = CapabilityToken::issue(
             key1,
@@ -366,7 +370,7 @@ mod tests {
             token_scope,
             sid,
             tid,
-            now_millis() + 3600_000,
+            now_millis() + 3_600_000,
         );
 
         assert!(token.permits(&request));
@@ -389,7 +393,7 @@ mod tests {
             token_scope,
             sid,
             tid,
-            now_millis() + 3600_000,
+            now_millis() + 3_600_000,
         );
 
         assert!(!token.permits(&request));

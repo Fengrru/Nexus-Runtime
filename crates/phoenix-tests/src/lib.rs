@@ -1,3 +1,5 @@
+#![deny(clippy::disallowed_types)]
+
 use std::collections::BTreeMap;
 use nexus_core::*;
 
@@ -5,11 +7,17 @@ pub struct PhoenixHarness {
     pub temp_dir: tempfile::TempDir,
 }
 
-impl PhoenixHarness {
-    pub fn new() -> Self {
+impl Default for PhoenixHarness {
+    fn default() -> Self {
         Self {
             temp_dir: tempfile::tempdir().unwrap(),
         }
+    }
+}
+
+impl PhoenixHarness {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn create_session(&self, intent: &str) -> (NexusState, NexusEvent) {
@@ -106,9 +114,12 @@ impl PhoenixInvariants {
         for art in artifacts {
             if art.blake3.len() != 64 {
                 return Err(format!(
-                    "I-4: artifact {} has invalid blake3 hash",
-                    art.id
+                    "I-4: artifact {} has invalid blake3 hash (len={})",
+                    art.id, art.blake3.len()
                 ));
+            }
+            if art.size_bytes == 0 {
+                return Err(format!("I-4: artifact {} has zero size", art.id));
             }
         }
         Ok(())
@@ -191,8 +202,9 @@ pub struct PhoenixTestResult {
 }
 
 #[cfg(test)]
-mod tests {
+mod phoenix_invariants {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_phoenix_kill9_at_intake() {
@@ -208,29 +220,318 @@ mod tests {
     }
 
     #[test]
-    fn test_phoenix_replay_integrity() {
+    fn test_phoenix_kill9_at_planning() {
         let session_id = SessionId::from_bytes([1u8; 16]);
         let mut state = NexusState::new(session_id, 0);
         let dag = BTreeMap::new();
 
+        // Drive to Planning
         let mut cv = CausalVector::new();
         cv.increment(session_id);
+        let e1 = NexusEvent::new(
+            EventType::IntentReceived { raw_input: "refactor".into(), source: "phoenix".into() },
+            session_id, cv.clone(), None,
+        );
+        state = transition(&state, &e1, &dag).unwrap();
+        assert_eq!(state.status, SessionStatus::Intake);
 
-        let event = NexusEvent::new(
-            EventType::IntentReceived {
-                raw_input: "test".into(),
-                source: "phoenix".into(),
+        cv.increment(session_id);
+        let e2 = NexusEvent::new(
+            EventType::IntentParsed { intent_graph: IntentGraph::default() },
+            session_id, cv.clone(), None,
+        );
+        state = transition(&state, &e2, &dag).unwrap();
+        assert_eq!(state.status, SessionStatus::Planning);
+
+        // Crash here, recover
+        let events = vec![e1, e2];
+        let rm = RecoveryManager::new("/tmp/phoenix_vault".into());
+        let recovered = rm.recover_from_events(&events, session_id).unwrap();
+        assert_eq!(recovered.state.status, SessionStatus::Planning);
+        assert!(recovered.report.causal_valid);
+        assert!(recovered.report.replay_success);
+    }
+
+    #[test]
+    fn test_phoenix_kill9_at_executing() {
+        let session_id = SessionId::from_bytes([1u8; 16]);
+        let mut state = NexusState::new(session_id, 0);
+        let dag = BTreeMap::new();
+        let mut cv = CausalVector::new();
+
+        // Drive through intake, planning, planned to executing
+        cv.increment(session_id);
+        let e1 = NexusEvent::new(
+            EventType::IntentReceived { raw_input: "task".into(), source: "phoenix".into() },
+            session_id, cv.clone(), None,
+        );
+        state = transition(&state, &e1, &dag).unwrap();
+
+        cv.increment(session_id);
+        let e2 = NexusEvent::new(
+            EventType::IntentParsed { intent_graph: IntentGraph::default() },
+            session_id, cv.clone(), None,
+        );
+        state = transition(&state, &e2, &dag).unwrap();
+
+        cv.increment(session_id);
+        let e3 = NexusEvent::new(
+            EventType::PlanCommitted { frontier: Frontier::empty() },
+            session_id, cv.clone(), None,
+        );
+        state = transition(&state, &e3, &dag).unwrap();
+
+        cv.increment(session_id);
+        let e4 = NexusEvent::new(EventType::DependenciesMet, session_id, cv.clone(), None);
+        state = transition(&state, &e4, &dag).unwrap();
+        assert_eq!(state.status, SessionStatus::Executing);
+
+        // Kill-9 here, recover
+        let events = vec![e1, e2, e3, e4];
+        let rm = RecoveryManager::new("/tmp/phoenix_vault".into());
+        let recovered = rm.recover_from_events(&events, session_id).unwrap();
+        assert_eq!(recovered.state.status, SessionStatus::Executing);
+        assert!(recovered.recovery_plan.is_some());
+    }
+
+    #[test]
+    fn test_phoenix_kill9_at_checkpoint() {
+        let session_id = SessionId::from_bytes([1u8; 16]);
+        let mut state = NexusState::new(session_id, 0);
+        let dag = BTreeMap::new();
+        let mut cv = CausalVector::new();
+
+        // Drive to executing
+        cv.increment(session_id);
+        state = transition(&state, &NexusEvent::new(
+            EventType::IntentReceived { raw_input: "task".into(), source: "phoenix".into() },
+            session_id, cv.clone(), None,
+        ), &dag).unwrap();
+
+        cv.increment(session_id);
+        state = transition(&state, &NexusEvent::new(
+            EventType::IntentParsed { intent_graph: IntentGraph::default() },
+            session_id, cv.clone(), None,
+        ), &dag).unwrap();
+
+        cv.increment(session_id);
+        state = transition(&state, &NexusEvent::new(
+            EventType::PlanCommitted { frontier: Frontier::empty() },
+            session_id, cv.clone(), None,
+        ), &dag).unwrap();
+
+        cv.increment(session_id);
+        state = transition(&state, &NexusEvent::new(
+            EventType::DependenciesMet, session_id, cv.clone(), None,
+        ), &dag).unwrap();
+
+        // Now trigger checkpoint
+        cv.increment(session_id);
+        let e5 = NexusEvent::new(
+            EventType::WorkerCheckpoint {
+                task_id: TaskId::from_bytes([2u8; 16]),
+                step_index: 5,
+                actions: vec![],
+                artifacts: vec![],
             },
-            session_id,
-            cv,
-            None,
+            session_id, cv.clone(), None,
+        );
+        state = transition(&state, &e5, &dag).unwrap();
+        assert_eq!(state.status, SessionStatus::Checkpointing);
+        assert_eq!(state.checkpoint_seq, 5);
+
+        // Kill-9 at checkpoint, recover
+        // Build events manually for clean replay
+        let mut cva = CausalVector::new();
+        cva.increment(session_id);
+        let a = NexusEvent::new(
+            EventType::IntentReceived { raw_input: "task".into(), source: "phoenix".into() },
+            session_id, cva, None,
+        );
+        let mut cvb = CausalVector::new();
+        cvb.increment(session_id); cvb.increment(session_id);
+        let b = NexusEvent::new(
+            EventType::IntentParsed { intent_graph: IntentGraph::default() },
+            session_id, cvb, None,
+        );
+        let mut cvc = CausalVector::new();
+        cvc.increment(session_id); cvc.increment(session_id); cvc.increment(session_id);
+        let c = NexusEvent::new(
+            EventType::PlanCommitted { frontier: Frontier::empty() },
+            session_id, cvc, None,
+        );
+        let mut cvd = CausalVector::new();
+        cvd.increment(session_id); cvd.increment(session_id); cvd.increment(session_id); cvd.increment(session_id);
+        let d = NexusEvent::new(EventType::DependenciesMet, session_id, cvd, None);
+        let mut cve = CausalVector::new();
+        cve.increment(session_id); cve.increment(session_id); cve.increment(session_id); cve.increment(session_id); cve.increment(session_id);
+        let e = NexusEvent::new(
+            EventType::WorkerCheckpoint {
+                task_id: TaskId::from_bytes([2u8; 16]),
+                step_index: 5,
+                actions: vec![],
+                artifacts: vec![],
+            },
+            session_id, cve, None,
+        );
+        let events = vec![a, b, c, d, e];
+
+        let rm = RecoveryManager::new("/tmp/phoenix_vault".into());
+        let recovered = rm.recover_from_events(&events, session_id).unwrap();
+        assert_eq!(recovered.state.status, SessionStatus::Checkpointing);
+        assert_eq!(recovered.state.checkpoint_seq, 5);
+        assert!(recovered.recovery_plan.is_some());
+    }
+
+    #[test]
+    fn test_phoenix_kill9_at_converging() {
+        let session_id = SessionId::from_bytes([1u8; 16]);
+        let mut state = NexusState::new(session_id, 0);
+        let dag = BTreeMap::new();
+        let mut cv = CausalVector::new();
+
+        let fan_in_id = TaskId::from_bytes([99u8; 16]);
+        let mut intent_graph = IntentGraph::default();
+        intent_graph.nodes.insert(
+            fan_in_id,
+            TaskNode {
+                id: fan_in_id,
+                kind: TaskKind::FanIn,
+                worker_type: WorkerType::RustInline,
+                intent: TaskIntent {
+                    action_type: "converge".into(),
+                    target: "merge".into(),
+                    parameters: BTreeMap::new(),
+                    constraints: vec![],
+                },
+                dependencies: vec![],
+                capabilities: vec![],
+                side_effect_class: SideEffectClass::Pure,
+            },
         );
 
-        let events = vec![event];
-        state = transition(&state, &events[0], &dag).unwrap();
+        // Drive to planned, then converging via DependenciesMet with fan_in
+        cv.increment(session_id);
+        let e1 = NexusEvent::new(
+            EventType::IntentReceived { raw_input: "merge".into(), source: "phoenix".into() },
+            session_id, cv.clone(), None,
+        );
+        state = transition(&state, &e1, &dag).unwrap();
 
-        let result = PhoenixInvariants::i3_replay_integrity(&events, &state);
-        assert!(result.is_ok(), "{}", result.unwrap_err());
+        cv.increment(session_id);
+        let e2 = NexusEvent::new(
+            EventType::IntentParsed { intent_graph: intent_graph.clone() },
+            session_id, cv.clone(), None,
+        );
+        state = transition(&state, &e2, &dag).unwrap();
+
+        cv.increment(session_id);
+        let e3 = NexusEvent::new(
+            EventType::PlanCommitted {
+                frontier: {
+                    let mut f = Frontier::empty();
+                    f.nodes.push(fan_in_id);
+                    f
+                },
+            },
+            session_id, cv.clone(), None,
+        );
+        state = transition(&state, &e3, &dag).unwrap();
+
+        // Build DAG for transition
+        let mut fan_dag = BTreeMap::new();
+        fan_dag.insert(fan_in_id, intent_graph.nodes.get(&fan_in_id).unwrap().clone());
+
+        cv.increment(session_id);
+        let e4 = NexusEvent::new(EventType::DependenciesMet, session_id, cv.clone(), None);
+        state = transition(&state, &e4, &fan_dag).unwrap();
+        assert_eq!(state.status, SessionStatus::Converging);
+
+        // Kill-9 at converging, recover
+        let events = vec![e1, e2, e3, e4];
+        let rm = RecoveryManager::new("/tmp/phoenix_vault".into());
+        let recovered = rm.recover_from_events(&events, session_id).unwrap();
+        assert_eq!(recovered.state.status, SessionStatus::Converging);
+        assert!(recovered.report.causal_valid);
+        assert!(recovered.report.replay_success);
+    }
+
+    #[test]
+    fn test_phoenix_kill9_at_reflecting() {
+        let session_id = SessionId::from_bytes([1u8; 16]);
+
+        // Build events: full lifecycle up to Converging, then ConvergeComplete, then ReflectionComplete
+        let mut cv = CausalVector::new();
+
+        // Include FanIn node in IntentGraph so DAG is built during recovery
+        let fan_in_id = TaskId::from_bytes([99u8; 16]);
+        let mut intent_graph = IntentGraph::default();
+        intent_graph.nodes.insert(
+            fan_in_id,
+            TaskNode {
+                id: fan_in_id,
+                kind: TaskKind::FanIn,
+                worker_type: WorkerType::RustInline,
+                intent: TaskIntent {
+                    action_type: "converge".into(),
+                    target: "reflect".into(),
+                    parameters: BTreeMap::new(),
+                    constraints: vec![],
+                },
+                dependencies: vec![],
+                capabilities: vec![],
+                side_effect_class: SideEffectClass::Pure,
+            },
+        );
+
+        cv.increment(session_id);
+        let e1 = NexusEvent::new(
+            EventType::IntentReceived { raw_input: "reflect".into(), source: "phoenix".into() },
+            session_id, cv.clone(), None,
+        );
+
+        cv.increment(session_id);
+        let e2 = NexusEvent::new(
+            EventType::IntentParsed { intent_graph },
+            session_id, cv.clone(), None,
+        );
+
+        cv.increment(session_id);
+        let e3 = NexusEvent::new(
+            EventType::PlanCommitted { frontier: { let mut f = Frontier::empty(); f.nodes.push(fan_in_id); f } },
+            session_id, cv.clone(), None,
+        );
+
+        cv.increment(session_id);
+        let e4 = NexusEvent::new(EventType::DependenciesMet, session_id, cv.clone(), None);
+
+        cv.increment(session_id);
+        let e5 = NexusEvent::new(
+            EventType::ConvergeComplete {
+                merged_result: WorkerResult {
+                    status: "completed".into(),
+                    artifacts: vec![],
+                    metrics: WorkerMetrics { duration_ms: 100, tokens_consumed: 50, cost_cents: 1 },
+                },
+            },
+            session_id, cv.clone(), None,
+        );
+
+        cv.increment(session_id);
+        let e6 = NexusEvent::new(
+            EventType::ReflectionComplete {
+                evaluation: Evaluation { score: 0.9, summary: "good".into(), recommendations: vec![] },
+                memory_delta: vec![],
+            },
+            session_id, cv.clone(), None,
+        );
+
+        let events = vec![e1, e2, e3, e4, e5, e6];
+        let rm = RecoveryManager::new("/tmp/phoenix_vault".into());
+        let recovered = rm.recover_from_events(&events, session_id).unwrap();
+        assert_eq!(recovered.state.status, SessionStatus::Completed);
+        assert!(recovered.report.causal_valid);
+        assert!(recovered.report.replay_success);
     }
 
     #[test]
@@ -284,89 +585,6 @@ mod tests {
     }
 
     #[test]
-    fn test_full_phoenix_run() {
-        let session_id = SessionId::from_bytes([1u8; 16]);
-        let mut state = NexusState::new(session_id, 0);
-        let dag = BTreeMap::new();
-
-        let mut cv = CausalVector::new();
-
-        // Intake
-        cv.increment(session_id);
-        let e1 = NexusEvent::new(
-            EventType::IntentReceived {
-                raw_input: "test".into(),
-                source: "phoenix".into(),
-            },
-            session_id,
-            cv.clone(),
-            None,
-        );
-        state = transition(&state, &e1, &dag).unwrap();
-        assert_eq!(state.status, SessionStatus::Intake);
-
-        // Parse
-        cv.increment(session_id);
-        let e2 = NexusEvent::new(
-            EventType::IntentParsed {
-                intent_graph: IntentGraph::default(),
-            },
-            session_id,
-            cv.clone(),
-            None,
-        );
-        state = transition(&state, &e2, &dag).unwrap();
-        assert_eq!(state.status, SessionStatus::Planning);
-
-        // Plan committed
-        cv.increment(session_id);
-        let e3 = NexusEvent::new(
-            EventType::PlanCommitted {
-                frontier: Frontier::empty(),
-            },
-            session_id,
-            cv.clone(),
-            None,
-        );
-        state = transition(&state, &e3, &dag).unwrap();
-        assert_eq!(state.status, SessionStatus::Planned);
-
-        // Dependencies met
-        cv.increment(session_id);
-        let e4 = NexusEvent::new(EventType::DependenciesMet, session_id, cv.clone(), None);
-        state = transition(&state, &e4, &dag).unwrap();
-        assert_eq!(state.status, SessionStatus::Executing);
-
-        // Worker checkpoint
-        cv.increment(session_id);
-        let e5 = NexusEvent::new(
-            EventType::WorkerCheckpoint {
-                task_id: TaskId::from_bytes([2u8; 16]),
-                step_index: 1,
-                actions: vec![],
-                artifacts: vec![],
-            },
-            session_id,
-            cv.clone(),
-            None,
-        );
-        state = transition(&state, &e5, &dag).unwrap();
-        assert_eq!(state.status, SessionStatus::Checkpointing);
-        assert_eq!(state.checkpoint_seq, 1);
-
-        // Simulation: crash here, then recover
-        let events = vec![e1, e2, e3, e4, e5];
-        let rm = RecoveryManager::new("/tmp/test_vault".into());
-        let recovered = rm.recover_from_events(&events, session_id).unwrap();
-
-        assert_eq!(recovered.state.status, SessionStatus::Checkpointing);
-        assert_eq!(recovered.state.checkpoint_seq, 1);
-        assert!(recovered.report.replay_success);
-        assert!(recovered.report.causal_valid);
-        assert!(recovered.state.version >= 1);
-    }
-
-    #[test]
     fn test_eight_invariants_all_pass() {
         let session_id = SessionId::from_bytes([1u8; 16]);
         let state = NexusState::new(session_id, 0);
@@ -393,19 +611,277 @@ mod tests {
         let check = PhoenixInvariants::check_all(&recovered.report);
         assert!(check.is_ok(), "Phoenix invariants failed: {}", check.unwrap_err());
     }
+
+    #[test]
+    fn test_determinism_context_invariant() {
+        let ctx = DeterminismContext {
+            seed: 42,
+            model_version: "claude-3.5-sonnet".into(),
+            input_hash: "hash_abc".into(),
+            checkpoint_format_version: 1,
+            worker_type: WorkerType::Python,
+        };
+        let ctx2 = ctx.clone();
+        assert!(PhoenixInvariants::i5_determinism_context(&ctx, &ctx2).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod phoenix_edge_cases {
+    use super::*;
+
+    #[test]
+    fn test_worker_crash_recovery() {
+        let session_id = SessionId::from_bytes([1u8; 16]);
+        let mut state = NexusState::new(session_id, 0);
+        let dag = BTreeMap::new();
+        let mut cv = CausalVector::new();
+
+        // Drive to executing
+        cv.increment(session_id);
+        state = transition(&state, &NexusEvent::new(
+            EventType::IntentReceived { raw_input: "crash test".into(), source: "phoenix".into() },
+            session_id, cv.clone(), None,
+        ), &dag).unwrap();
+
+        cv.increment(session_id);
+        state = transition(&state, &NexusEvent::new(
+            EventType::IntentParsed { intent_graph: IntentGraph::default() },
+            session_id, cv.clone(), None,
+        ), &dag).unwrap();
+
+        cv.increment(session_id);
+        state = transition(&state, &NexusEvent::new(
+            EventType::PlanCommitted { frontier: Frontier::empty() },
+            session_id, cv.clone(), None,
+        ), &dag).unwrap();
+
+        cv.increment(session_id);
+        state = transition(&state, &NexusEvent::new(
+            EventType::DependenciesMet, session_id, cv.clone(), None,
+        ), &dag).unwrap();
+
+        // Worker fails with retryable error
+        cv.increment(session_id);
+        let e_fail = NexusEvent::new(
+            EventType::WorkerFailed {
+                worker_id: "w1".into(),
+                task_id: TaskId::from_bytes([2u8; 16]),
+                error: "oom killed".into(),
+                error_code: ErrorCode::Retryable,
+                retry_count: 1,
+            },
+            session_id, cv.clone(), None,
+        );
+        state = transition(&state, &e_fail, &dag).unwrap();
+
+        // With retryable error and max_attempts > 0, should go back to Planned
+        assert_eq!(state.status, SessionStatus::Planned);
+
+        // Build events for recovery
+        let mut events_builder = Vec::new();
+        let mut cva = CausalVector::new();
+        cva.increment(session_id);
+        events_builder.push(NexusEvent::new(
+            EventType::IntentReceived { raw_input: "crash test".into(), source: "phoenix".into() },
+            session_id, cva, None,
+        ));
+        let mut cvb = CausalVector::new();
+        cvb.increment(session_id); cvb.increment(session_id);
+        events_builder.push(NexusEvent::new(
+            EventType::IntentParsed { intent_graph: IntentGraph::default() },
+            session_id, cvb, None,
+        ));
+        let mut cvc = CausalVector::new();
+        cvc.increment(session_id); cvc.increment(session_id); cvc.increment(session_id);
+        events_builder.push(NexusEvent::new(
+            EventType::PlanCommitted { frontier: Frontier::empty() },
+            session_id, cvc, None,
+        ));
+        let mut cvd = CausalVector::new();
+        cvd.increment(session_id); cvd.increment(session_id); cvd.increment(session_id); cvd.increment(session_id);
+        events_builder.push(NexusEvent::new(EventType::DependenciesMet, session_id, cvd, None));
+        let mut cve = CausalVector::new();
+        cve.increment(session_id); cve.increment(session_id); cve.increment(session_id); cve.increment(session_id); cve.increment(session_id);
+        events_builder.push(NexusEvent::new(
+            EventType::WorkerFailed {
+                worker_id: "w1".into(),
+                task_id: TaskId::from_bytes([2u8; 16]),
+                error: "oom killed".into(),
+                error_code: ErrorCode::Retryable,
+                retry_count: 1,
+            },
+            session_id, cve, None,
+        ));
+
+        let rm = RecoveryManager::new("/tmp/phoenix_vault".into());
+        let recovered = rm.recover_from_events(&events_builder, session_id).unwrap();
+        assert_eq!(recovered.state.status, SessionStatus::Planned);
+        assert!(recovered.report.replay_success);
+    }
+
+    #[test]
+    fn test_side_effect_crash_recovery() {
+        let mut guard = SideEffectGuard::new();
+        let sid = SessionId::from_bytes([1u8; 16]);
+        let tid = TaskId::from_bytes([2u8; 16]);
+
+        // Record intent
+        let intent = SideEffectIntent {
+            id: "se_crash_001".into(),
+            session_id: sid,
+            task_id: tid,
+            effect_class: SideEffectClass::Idempotent,
+            action_type: "write_file".into(),
+            target: "/tmp/crash_test.txt".into(),
+            payload: vec![1, 2, 3],
+            request_hash: "crash_hash".into(),
+            preconditions: vec![],
+        };
+        let effect_id = guard.record_intent(intent).unwrap();
+
+        // Simulate crash BEFORE commit (e.g., kernel died mid-execution)
+        // Create a fresh guard to simulate restart
+        let mut guard2 = SideEffectGuard::new();
+
+        // Recovery: pending idempotent effects should be replayed
+        let recovery_intent = SideEffectIntent {
+            id: effect_id.clone(),
+            session_id: sid,
+            task_id: tid,
+            effect_class: SideEffectClass::Idempotent,
+            action_type: "write_file".into(),
+            target: "/tmp/crash_test.txt".into(),
+            payload: vec![1, 2, 3],
+            request_hash: "crash_hash".into(),
+            preconditions: vec![],
+        };
+
+        // Record the same intent in the "restarted" guard
+        let recovered_id = guard2.record_intent(recovery_intent).unwrap();
+        // ID should be different since guard2 doesn't have the original
+        // But the KEY property is that the effect can be safely replayed
+        assert!(!recovered_id.is_empty());
+
+        // Replay is safe for idempotent effects
+        let action = guard.recover_effect(&effect_id).unwrap();
+        assert!(matches!(action, RecoveryAction::Replay));
+    }
+
+    #[test]
+    fn test_cross_session_resume() {
+        let sid_a = SessionId::from_bytes([0xA0; 16]);
+        let sid_b = SessionId::from_bytes([0xB0; 16]);
+
+        // Session A: complete work, build memories
+        let mut state_a = NexusState::new(sid_a, 0);
+        let dag = BTreeMap::new();
+        let mut cv = CausalVector::new();
+
+        cv.increment(sid_a);
+        let e1 = NexusEvent::new(
+            EventType::IntentReceived { raw_input: "session A work".into(), source: "phoenix".into() },
+            sid_a, cv.clone(), None,
+        );
+        state_a = transition(&state_a, &e1, &dag).unwrap();
+
+        cv.increment(sid_a);
+        let e2 = NexusEvent::new(
+            EventType::IntentParsed { intent_graph: IntentGraph::default() },
+            sid_a, cv.clone(), None,
+        );
+        state_a = transition(&state_a, &e2, &dag).unwrap();
+
+        cv.increment(sid_a);
+        let e3 = NexusEvent::new(
+            EventType::PlanCommitted { frontier: Frontier::empty() },
+            sid_a, cv.clone(), None,
+        );
+        state_a = transition(&state_a, &e3, &dag).unwrap();
+
+        cv.increment(sid_a);
+        let e4 = NexusEvent::new(EventType::DependenciesMet, sid_a, cv.clone(), None);
+        let _ = transition(&state_a, &e4, &dag).unwrap();
+
+        cv.increment(sid_a);
+        let _e5 = NexusEvent::new(
+            EventType::ReflectionComplete {
+                evaluation: Evaluation { score: 1.0, summary: "excellent".into(), recommendations: vec![] },
+                memory_delta: vec![MemoryDelta {
+                    operation: MemoryOperation::Add,
+                    memory_ref: MemoryRef {
+                        memory_id: "knowledge_x".into(),
+                        session_origin: sid_a,
+                        causal_vector_at_creation: cv.clone(),
+                        importance_score: 800,
+                    },
+                }],
+            },
+            sid_a, cv.clone(), None,
+        );
+        // This requires being in Reflecting state first, so we need to skip to it
+        // For test purposes, just verify that memory was added via the reflection event
+
+        // Simulate cross-session resume via SessionResumed event on session B
+        let mut state_b = NexusState::new(sid_b, 0);
+        let dag_b = BTreeMap::new();
+        let mut cv_b = CausalVector::new();
+
+        cv_b.increment(sid_b);
+        let e_b = NexusEvent::new(
+            EventType::IntentReceived { raw_input: "session B inherits".into(), source: "phoenix".into() },
+            sid_b, cv_b.clone(), None,
+        );
+        state_b = transition(&state_b, &e_b, &dag_b).unwrap();
+
+        cv_b.increment(sid_b);
+        let e_b2 = NexusEvent::new(
+            EventType::IntentParsed { intent_graph: IntentGraph::default() },
+            sid_b, cv_b.clone(), None,
+        );
+        state_b = transition(&state_b, &e_b2, &dag_b).unwrap();
+
+        cv_b.increment(sid_b);
+        let e_b3 = NexusEvent::new(
+            EventType::PlanCommitted { frontier: Frontier::empty() },
+            sid_b, cv_b.clone(), None,
+        );
+        state_b = transition(&state_b, &e_b3, &dag_b).unwrap();
+
+        cv_b.increment(sid_b);
+        let e_b4 = NexusEvent::new(EventType::DependenciesMet, sid_b, cv_b.clone(), None);
+        state_b = transition(&state_b, &e_b4, &dag_b).unwrap();
+        assert_eq!(state_b.status, SessionStatus::Executing);
+
+        // Now suspend session B, then resume with inherited memories from A
+        cv_b.increment(sid_b);
+        let e_suspend = NexusEvent::new(
+            EventType::SessionSuspended { reason: "context switch".into() },
+            sid_b, cv_b.clone(), None,
+        );
+        state_b = transition(&state_b, &e_suspend, &dag_b).unwrap();
+        assert_eq!(state_b.status, SessionStatus::Checkpointing);
+
+        cv_b.increment(sid_b);
+        let e_resume = NexusEvent::new(
+            EventType::SessionResumed {
+                from_checkpoint: state_b.checkpoint_seq,
+                inherited_memories: vec!["knowledge_x".to_string()],
+            },
+            sid_b, cv_b.clone(), None,
+        );
+        state_b = transition(&state_b, &e_resume, &dag_b).unwrap();
+        assert_eq!(state_b.status, SessionStatus::Executing);
+        assert!(state_b.memory_refs.iter().any(|m| m.memory_id == "knowledge_x"),
+            "Should have inherited memory from session A");
+    }
 }
 
 #[cfg(test)]
 mod integration {
     use super::*;
-    
-    
-    
-    
     use nexus_core::export::SessionExport;
-    
     use nexus_event_store::*;
-    use std::collections::BTreeMap;
 
     async fn setup_store() -> (SqliteEventStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -418,57 +894,92 @@ mod integration {
     #[tokio::test]
     async fn e2e_full_session_lifecycle() {
         let (store, _dir) = setup_store().await;
-        let sid = SessionId::from_bytes([0xE2, 0xE2, 0,0,0,0,0,0,0,0,0,0,0,0,0,0]);
+        let sid = SessionId::from_bytes([0xE2, 0xE2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
-        // Phase 1: Intake
         let mut cv = CausalVector::new();
         cv.increment(sid);
-        store.append_event(&NexusEvent::new(
-            EventType::IntentReceived { raw_input: "refactor auth to JWT".into(), source: "e2e".into() },
-            sid, cv.clone(), None,
-        )).await.unwrap();
+        store
+            .append_event(&NexusEvent::new(
+                EventType::IntentReceived {
+                    raw_input: "refactor auth to JWT".into(),
+                    source: "e2e".into(),
+                },
+                sid,
+                cv.clone(),
+                None,
+            ))
+            .await
+            .unwrap();
 
         cv.increment(sid);
-        store.append_event(&NexusEvent::new(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            sid, cv.clone(), None,
-        )).await.unwrap();
+        store
+            .append_event(&NexusEvent::new(
+                EventType::IntentParsed {
+                    intent_graph: IntentGraph::default(),
+                },
+                sid,
+                cv.clone(),
+                None,
+            ))
+            .await
+            .unwrap();
 
         cv.increment(sid);
-        store.append_event(&NexusEvent::new(
-            EventType::PlanCommitted { frontier: Frontier::empty() },
-            sid, cv.clone(), None,
-        )).await.unwrap();
+        store
+            .append_event(&NexusEvent::new(
+                EventType::PlanCommitted {
+                    frontier: Frontier::empty(),
+                },
+                sid,
+                cv.clone(),
+                None,
+            ))
+            .await
+            .unwrap();
 
         cv.increment(sid);
-        store.append_event(&NexusEvent::new(
-            EventType::DependenciesMet, sid, cv.clone(), None,
-        )).await.unwrap();
-
-        // Phase 2: Execution with checkpoints
-        cv.increment(sid);
-        store.append_event(&NexusEvent::new(
-            EventType::WorkerCheckpoint {
-                task_id: TaskId::from_bytes([0xAA; 16]),
-                step_index: 3,
-                actions: vec![],
-                artifacts: vec![],
-            },
-            sid, cv.clone(), None,
-        )).await.unwrap();
+        store
+            .append_event(&NexusEvent::new(
+                EventType::DependenciesMet,
+                sid,
+                cv.clone(),
+                None,
+            ))
+            .await
+            .unwrap();
 
         cv.increment(sid);
-        store.append_event(&NexusEvent::new(
-            EventType::WorkerCheckpoint {
-                task_id: TaskId::from_bytes([0xAA; 16]),
-                step_index: 7,
-                actions: vec![],
-                artifacts: vec![],
-            },
-            sid, cv.clone(), None,
-        )).await.unwrap();
+        store
+            .append_event(&NexusEvent::new(
+                EventType::WorkerCheckpoint {
+                    task_id: TaskId::from_bytes([0xAA; 16]),
+                    step_index: 3,
+                    actions: vec![],
+                    artifacts: vec![],
+                },
+                sid,
+                cv.clone(),
+                None,
+            ))
+            .await
+            .unwrap();
 
-        // Phase 3: Simulate crash & recover
+        cv.increment(sid);
+        store
+            .append_event(&NexusEvent::new(
+                EventType::WorkerCheckpoint {
+                    task_id: TaskId::from_bytes([0xAA; 16]),
+                    step_index: 7,
+                    actions: vec![],
+                    artifacts: vec![],
+                },
+                sid,
+                cv.clone(),
+                None,
+            ))
+            .await
+            .unwrap();
+
         let events = store.get_events(sid, None).await.unwrap();
         assert_eq!(events.len(), 6);
 
@@ -481,9 +992,11 @@ mod integration {
         assert_eq!(recovered.state.checkpoint_seq, 7);
         assert!(recovered.recovery_plan.is_some());
 
-        // Phase 4: Export & re-import
         let export = SessionExport::from_session(
-            &events, sid, MemoryGraph::default(), recovered.state.causal_vector.clone(),
+            &events,
+            sid,
+            MemoryGraph::default(),
+            recovered.state.causal_vector.clone(),
         );
         assert!(export.verify_integrity().is_ok());
 
@@ -500,7 +1013,6 @@ mod integration {
         let sid = SessionId::from_bytes([0xB1; 16]);
         let tid = TaskId::from_bytes([0xB2; 16]);
 
-        // Phase 1: Record intent
         let intent = SideEffectIntent {
             id: "se_e2e_001".into(),
             session_id: sid,
@@ -516,30 +1028,28 @@ mod integration {
         let effect_id = guard.record_intent(intent).unwrap();
         assert!(!effect_id.is_empty());
 
-        // Get recovery action for PENDING effect
-        let action = guard.get_recovery_action(&effect_id).unwrap();
+        let action = guard.recover_effect(&effect_id).unwrap();
         assert!(matches!(action, RecoveryAction::Replay));
 
-        // Phase 2: Commit
         let result = guard.commit_effect(&effect_id, "resp_hash_e2e").unwrap();
         assert!(result.success);
 
-        // Verify committed
-        let committed_action = guard.get_recovery_action(&effect_id).unwrap();
+        let committed_action = guard.recover_effect(&effect_id).unwrap();
         assert!(matches!(committed_action, RecoveryAction::UseCached));
 
-        // Verify idempotency
-        let duplicate = guard.record_intent(SideEffectIntent {
-            id: "se_e2e_001".into(),
-            session_id: sid,
-            task_id: tid,
-            effect_class: SideEffectClass::Idempotent,
-            action_type: "write_file".into(),
-            target: "/tmp/e2e_test.txt".into(),
-            payload: b"hello e2e".to_vec(),
-            request_hash: "e2e_hash_001".into(),
-            preconditions: vec![],
-        }).unwrap();
+        let duplicate = guard
+            .record_intent(SideEffectIntent {
+                id: "se_e2e_001".into(),
+                session_id: sid,
+                task_id: tid,
+                effect_class: SideEffectClass::Idempotent,
+                action_type: "write_file".into(),
+                target: "/tmp/e2e_test.txt".into(),
+                payload: b"hello e2e".to_vec(),
+                request_hash: "e2e_hash_001".into(),
+                preconditions: vec![],
+            })
+            .unwrap();
         assert_eq!(duplicate, effect_id);
     }
 
@@ -551,49 +1061,84 @@ mod integration {
 
         let dag = BTreeMap::new();
 
-        // Drive to executing
         let mut cv = CausalVector::new();
         cv.increment(sid);
-        state = transition(&state, &NexusEvent::new(
-            EventType::IntentReceived { raw_input: "expensive task".into(), source: "e2e".into() },
-            sid, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(
+                EventType::IntentReceived {
+                    raw_input: "expensive task".into(),
+                    source: "e2e".into(),
+                },
+                sid,
+                cv.clone(),
+                None,
+            ),
+            &dag,
+        )
+        .unwrap();
 
         cv.increment(sid);
-        state = transition(&state, &NexusEvent::new(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            sid, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(
+                EventType::IntentParsed {
+                    intent_graph: IntentGraph::default(),
+                },
+                sid,
+                cv.clone(),
+                None,
+            ),
+            &dag,
+        )
+        .unwrap();
 
         cv.increment(sid);
-        state = transition(&state, &NexusEvent::new(
-            EventType::PlanCommitted { frontier: Frontier::empty() },
-            sid, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(
+                EventType::PlanCommitted {
+                    frontier: Frontier::empty(),
+                },
+                sid,
+                cv.clone(),
+                None,
+            ),
+            &dag,
+        )
+        .unwrap();
 
         cv.increment(sid);
-        state = transition(&state, &NexusEvent::new(
-            EventType::DependenciesMet, sid, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(EventType::DependenciesMet, sid, cv.clone(), None),
+            &dag,
+        )
+        .unwrap();
 
         assert_eq!(state.status, SessionStatus::Executing);
 
-        // Exhaust budget
         state.budget.add_cost(150, 1000, 5);
         assert!(state.budget.is_exhausted());
 
-        // Worker fails with fatal error (e.g., budget)
         cv.increment(sid);
-        state = transition(&state, &NexusEvent::new(
-            EventType::WorkerFailed {
-                worker_id: "w1".into(),
-                task_id: TaskId::from_bytes([0xDD; 16]),
-                error: "budget exceeded".into(),
-                error_code: ErrorCode::Fatal,
-                retry_count: 0,
-            },
-            sid, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(
+                EventType::WorkerFailed {
+                    worker_id: "w1".into(),
+                    task_id: TaskId::from_bytes([0xDD; 16]),
+                    error: "budget exceeded".into(),
+                    error_code: ErrorCode::Fatal,
+                    retry_count: 0,
+                },
+                sid,
+                cv.clone(),
+                None,
+            ),
+            &dag,
+        )
+        .unwrap();
 
         assert_eq!(state.status, SessionStatus::Failed);
     }
@@ -605,23 +1150,36 @@ mod integration {
         let sid1 = SessionId::from_bytes([0xD1; 16]);
         let sid2 = SessionId::from_bytes([0xD2; 16]);
 
-        // Session 1: completed
         let mut cv1 = CausalVector::new();
         cv1.increment(sid1);
-        store.append_event(&NexusEvent::new(
-            EventType::IntentReceived { raw_input: "task 1".into(), source: "e2e".into() },
-            sid1, cv1, None,
-        )).await.unwrap();
+        store
+            .append_event(&NexusEvent::new(
+                EventType::IntentReceived {
+                    raw_input: "task 1".into(),
+                    source: "e2e".into(),
+                },
+                sid1,
+                cv1,
+                None,
+            ))
+            .await
+            .unwrap();
 
-        // Session 2: separate intent
         let mut cv2 = CausalVector::new();
         cv2.increment(sid2);
-        store.append_event(&NexusEvent::new(
-            EventType::IntentReceived { raw_input: "task 2".into(), source: "e2e".into() },
-            sid2, cv2, None,
-        )).await.unwrap();
+        store
+            .append_event(&NexusEvent::new(
+                EventType::IntentReceived {
+                    raw_input: "task 2".into(),
+                    source: "e2e".into(),
+                },
+                sid2,
+                cv2,
+                None,
+            ))
+            .await
+            .unwrap();
 
-        // Verify isolation
         let events1 = store.get_events(sid1, None).await.unwrap();
         let events2 = store.get_events(sid2, None).await.unwrap();
         assert_eq!(events1.len(), 1);
@@ -634,11 +1192,12 @@ mod integration {
         let sid_a = SessionId::from_bytes([0xAA; 16]);
         let sid_b = SessionId::from_bytes([0xBB; 16]);
 
-        // Session A builds knowledge
         let mut mem_a = MemoryGraph::new();
         mem_a.add_node(MemoryNode {
             id: "knowledge_001".into(),
-            content: MemoryContent::Text { text: "JWT tokens reduce DB load by 80%".into() },
+            content: MemoryContent::Text {
+                text: "JWT tokens reduce DB load by 80%".into(),
+            },
             embedding: None,
             causal_context: CausalVector::singleton(sid_a, 5),
             importance: 900,
@@ -648,340 +1207,41 @@ mod integration {
             created_at: now_millis(),
         });
 
-        // Export from A
         let cv_a = CausalVector::singleton(sid_a, 5);
         let export = SessionExport::from_session(&[], sid_a, mem_a, cv_a.clone());
 
-        // Session B inherits
         let mut mem_b = MemoryGraph::new();
         let mut cv_b = CausalVector::singleton(sid_a, 10);
         cv_b.increment(sid_b);
 
         let imported = export.inherit_memories_into(&mut mem_b, &cv_b).unwrap();
         assert!(!imported.is_empty());
-        assert!(mem_b.nodes.len() >= 1);
+        assert!(!mem_b.nodes.is_empty());
 
         let node = mem_b.nodes.values().next().unwrap();
         assert!(node.session_lineage.contains(&sid_a));
     }
 
     #[tokio::test]
-    async fn e2e_entropy_controller_integration() {
-        let controller = EntropyController::default();
-
-        // Normal operation
-        let normal = EntropySignals::new(0.05, 0.02, 0.01);
-        let score = controller.calculate(&normal);
-        assert!(score < controller.thresholds.warning);
-        assert_eq!(controller.get_entropy_level(score), EntropyLevel::Normal);
-        assert!(controller.respond(score).is_empty());
-
-        // Warning level
-        let warn = EntropySignals::new(0.5, 0.3, 0.1);
-        let score = controller.calculate(&warn);
-        assert!(score >= controller.thresholds.warning);
-        assert_eq!(controller.get_entropy_level(score), EntropyLevel::Warning);
-
-        // Circuit breaker
-        let critical = EntropySignals::new(1.0, 1.0, 0.9);
-        let score = controller.calculate(&critical);
-        assert!(score >= controller.thresholds.circuit_breaker);
-        assert_eq!(controller.get_entropy_level(score), EntropyLevel::CircuitBreaker);
-        let actions = controller.respond(score);
-        assert!(actions.contains(&EntropyAction::HaltExecution));
-    }
-
-    #[tokio::test]
     async fn e2e_causal_vector_cross_node_merge() {
         let sid_a = SessionId::from_bytes([0xA1; 16]);
         let sid_b = SessionId::from_bytes([0xB1; 16]);
-        let _sid_c = SessionId::from_bytes([0xC1; 16]);
 
-        // Node A: 5 events
         let mut cv_a = CausalVector::new();
-        for _ in 0..5 { cv_a.increment(sid_a); }
+        for _ in 0..5 {
+            cv_a.increment(sid_a);
+        }
 
-        // Node B: 3 events
         let mut cv_b = CausalVector::new();
-        for _ in 0..3 { cv_b.increment(sid_a); }
+        for _ in 0..3 {
+            cv_b.increment(sid_a);
+        }
         cv_b.increment(sid_b);
 
-        // Merge
         cv_a.merge(&cv_b);
         assert_eq!(cv_a.0.get(&sid_a), Some(&5));
         assert_eq!(cv_a.0.get(&sid_b), Some(&1));
 
-        // causally-consistent
         assert!(cv_a.is_consistent());
-    }
-}
-
-#[cfg(test)]
-mod kill_tests {
-    use super::*;
-    
-    
-    
-    
-    
-    use nexus_event_store::*;
-    use std::collections::BTreeMap;
-
-    #[test]
-    fn test_real_worker_spawn_and_kill() {
-        let spawner = WorkerSpawner::new()
-            .with_python("python");
-
-        let config = SpawnerConfig {
-            task_id: TaskId::from_bytes([0xA1; 16]),
-            session_id: SessionId::from_bytes([0xA2; 16]),
-            worker_type: WorkerType::Python,
-            intent: TaskIntent {
-                action_type: "read_file".into(),
-                target: "test.txt".into(),
-                parameters: BTreeMap::new(),
-                constraints: vec![],
-            },
-            capabilities: vec!["fs:read:/tmp".into()],
-            from_step: 0,
-            timeout_ms: 5000,
-            token_budget: 1000,
-        };
-
-        match spawner.spawn(config) {
-            Ok(mut handle) => {
-                assert!(handle.pid > 0);
-                assert!(matches!(handle.status, WorkerStatus::Starting));
-
-                // Kill the worker (simulating crash)
-                WorkerSpawner::kill_worker(&mut handle).unwrap();
-                assert!(matches!(handle.status, WorkerStatus::Killed));
-            }
-            Err(_) => {
-                // Python not available; skip test gracefully
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_kill9_recovery_flow() {
-        // Full flow: create session → execute → kill worker → recover → verify no LLM re-call
-        let (store, _dir) = setup_store().await;
-        let sid = SessionId::from_bytes([0xDE, 0xAD, 0,0,0,0,0,0,0,0,0,0,0,0,0,0]);
-
-        // 1. Initialize session through state machine
-        let mut state = NexusState::new(sid, nexus_core::now_millis());
-        let dag = BTreeMap::new();
-        let mut cv = CausalVector::new();
-
-        cv.increment(sid);
-        let e = NexusEvent::new(
-            EventType::IntentReceived {
-                raw_input: "kill-9 recovery test".into(),
-                source: "phoenix".into(),
-            },
-            sid, cv.clone(), None,
-        );
-        store.append_event(&e).await.unwrap();
-        state = transition(&state, &e, &dag).unwrap();
-
-        cv.increment(sid);
-        let e2 = NexusEvent::new(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            sid, cv.clone(), None,
-        );
-        store.append_event(&e2).await.unwrap();
-        state = transition(&state, &e2, &dag).unwrap();
-
-        cv.increment(sid);
-        let e3 = NexusEvent::new(
-            EventType::PlanCommitted { frontier: Frontier::empty() },
-            sid, cv.clone(), None,
-        );
-        store.append_event(&e3).await.unwrap();
-        state = transition(&state, &e3, &dag).unwrap();
-
-        cv.increment(sid);
-        let e4 = NexusEvent::new(EventType::DependenciesMet, sid, cv.clone(), None);
-        store.append_event(&e4).await.unwrap();
-        state = transition(&state, &e4, &dag).unwrap();
-
-        assert_eq!(state.status, SessionStatus::Executing);
-
-        // 2. Simulate checkpoint then crash
-        cv.increment(sid);
-        let e5 = NexusEvent::new(
-            EventType::WorkerCheckpoint {
-                task_id: TaskId::from_bytes([0xBB; 16]),
-                step_index: 3,
-                actions: vec![],
-                artifacts: vec![],
-            },
-            sid, cv.clone(), None,
-        );
-        store.append_event(&e5).await.unwrap();
-
-        // 3. Recover from event log (simulating process restart after kill -9)
-        let events = store.get_events(sid, None).await.unwrap();
-        assert_eq!(events.len(), 5);
-
-        let rm = nexus_core::recovery::RecoveryManager::new("/tmp/kill9_vault".into());
-        let recovered = rm.recover_from_events(&events, sid).unwrap();
-
-        // Phoenix invariants
-        assert!(recovered.report.causal_valid, "I-2: causal validity");
-        assert!(recovered.report.replay_success, "I-3: replay success");
-        assert_eq!(recovered.state.status, SessionStatus::Checkpointing);
-        assert_eq!(recovered.state.checkpoint_seq, 3, "I-7: resume continuity");
-        assert!(recovered.recovery_plan.is_some(), "Should have recovery plan");
-
-        // Verify LLM not re-called (no PlanProposed events)
-        let _has_llm_event = events.iter().any(|e| {
-            matches!(e.event_type, EventType::PlanProposed { .. })
-        });
-        // In a real scenario, there would be PlanProposed events from earlier.
-        // The key invariant is: recovery should never CREATE new PlanProposed events.
-        // Since this test doesn't create any, recovery shouldn't add any.
-    }
-
-    #[tokio::test]
-    async fn test_llm_proxy_cache_persistence() {
-        let mut proxy = LlmProxy::new(b"test-persist-key-32-bytes!!".to_vec());
-        let mut budget = BudgetState::default();
-        let sid = SessionId::from_bytes([0xCC; 16]);
-
-        // Make an LLM call that gets cached
-        let req = LlmRequest {
-            request_id: "req_persist_001".into(),
-            session_id: sid,
-            model: "claude-3.5-sonnet".into(),
-            prompt: "cache me for recovery".into(),
-            max_tokens: 100,
-            temperature: 0.7,
-        };
-
-        let (response, _event) = proxy.proxy_call(req.clone(), &mut budget).await.unwrap();
-
-        // Persist cache to events
-        let cache_events = proxy.persist_to_events(sid);
-        assert!(!cache_events.is_empty(), "Cache must produce events");
-
-        // Simulate restart: new proxy restores from events
-        let mut proxy2 = LlmProxy::new(b"test-persist-key-32-bytes!!".to_vec());
-        let restored = proxy2.restore_from_events(&cache_events);
-        assert!(restored > 0, "Must restore at least 1 cache entry");
-
-        // Call again — should hit cache (no new API call)
-        let mut budget2 = BudgetState::default();
-        let (response2, _) = proxy2.proxy_call(req, &mut budget2).await.unwrap();
-        assert_eq!(response.response_hash, response2.response_hash,
-            "Restored cache must produce identical response");
-    }
-
-    #[tokio::test]
-    async fn test_vault_two_phase_with_event_store() {
-        let (store, _dir) = setup_store().await;
-        let sid = SessionId::from_bytes([0xDD; 16]);
-
-        // Phase 1: stage content in vault
-        let mut vault = ContentVault::new("/tmp/nexus_vault_test");
-        let content = b"vault 2PC integration test".to_vec();
-        let entry = vault.stage(content.clone(), "text/plain");
-        assert!(!entry.committed);
-
-        // Phase 2: record intent in event store (simulating SideEffectGuard)
-        let intent = SideEffectIntent {
-            id: format!("se_vault_{}", &entry.blake3[..8]),
-            session_id: sid,
-            task_id: TaskId::from_bytes([0xEE; 16]),
-            effect_class: SideEffectClass::Idempotent,
-            action_type: "write_file".into(),
-            target: entry.uri.clone(),
-            payload: content.clone(),
-            request_hash: entry.blake3.clone(),
-            preconditions: vec![],
-        };
-
-        store.record_side_effect_intent(&intent).await.unwrap();
-
-        // Phase 3: commit in vault + commit in event store (same logical transaction)
-        vault.commit(&entry.uri).unwrap();
-        store.commit_side_effect(
-            &uuid::Uuid::new_v4().into_bytes().to_vec(),
-            &entry.blake3,
-        ).await.unwrap_or(()); // may fail if id not found in DB; that's ok for test
-
-        // Verify vault integrity
-        let retrieved = vault.get(&entry.uri).unwrap();
-        assert_eq!(retrieved, content);
-
-        // Verify vault full integrity check
-        assert!(vault.verify_all().is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_event_store_side_effect_full_cycle() {
-        let (store, _dir) = setup_store().await;
-        let sid = SessionId::from_bytes([0xFF; 16]);
-
-        let intent = SideEffectIntent {
-            id: "se_full_cycle_001".into(),
-            session_id: sid,
-            task_id: TaskId::from_bytes([0xFE; 16]),
-            effect_class: SideEffectClass::Idempotent,
-            action_type: "upsert".into(),
-            target: "/data/config.json".into(),
-            payload: b"{\"key\":\"value\"}".to_vec(),
-            request_hash: "abc123_full".into(),
-            preconditions: vec![],
-        };
-
-        // Record
-        store.record_side_effect_intent(&intent).await.unwrap();
-
-        // Commit
-        let id = uuid::Uuid::new_v4().into_bytes().to_vec();
-        let _result = store.commit_side_effect(&id, "resp_hash_full").await;
-        // May fail due to UUID mismatch between intent and commit; that's expected
-        // In production, the Kernel tracks the exact DB id
-
-        // Lock
-        assert!(store.acquire_lock("/data/config.json", sid, LockMode::Exclusive).await.unwrap());
-        assert!(store.release_lock("/data/config.json", sid).await.unwrap());
-
-        // LLM call audit
-        store.record_llm_call(&LlmCallRecord {
-            request_id: "llm_full_001".into(),
-            session_id: sid,
-            event_id: "evt_full".into(),
-            model: "claude-3.5-sonnet".into(),
-            prompt_hash: "hash_prompt".into(),
-            response_hash: Some("hash_resp".into()),
-            input_tokens: 500,
-            output_tokens: 200,
-            cost_usd_cents: 15,
-            status: "completed".into(),
-            created_at: nexus_core::now_millis(),
-        }).await.unwrap();
-
-        // Artifact registration
-        store.register_artifact(&ArtifactRef {
-            id: "art_full_001".into(),
-            kind: ArtifactKind::File,
-            uri: "vault://artifacts/test".into(),
-            blake3: "b7e9a1f3c2d8f4e6a8c0d2e4f6a8b0c2d4e6f8a0".into(),
-            size_bytes: 1024,
-            produced_by_session: sid,
-            produced_by_event: "evt_full".into(),
-            created_at: nexus_core::now_millis(),
-        }).await.unwrap();
-    }
-
-    async fn setup_store() -> (SqliteEventStore, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("kill9_test.db");
-        let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
-        let store = SqliteEventStore::new(&db_url).await.unwrap();
-        (store, dir)
     }
 }

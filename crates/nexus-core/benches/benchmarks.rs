@@ -1,7 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::collections::BTreeMap;
 use nexus_core::*;
-use nexus_core::event::*;
 
 fn bench_transition(c: &mut Criterion) {
     c.bench_function("transition_intent_received", |b| {

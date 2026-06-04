@@ -34,17 +34,9 @@ impl EntropySignals {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EntropyController {
     pub thresholds: EntropyThresholds,
-}
-
-impl Default for EntropyController {
-    fn default() -> Self {
-        Self {
-            thresholds: EntropyThresholds::default(),
-        }
-    }
 }
 
 impl EntropyController {

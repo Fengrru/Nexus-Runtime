@@ -1,6 +1,5 @@
-/// Golden Fixture Tests
 #[cfg(test)]
-mod golden_tests {
+mod tests {
     use crate::*;
     
     

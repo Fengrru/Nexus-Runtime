@@ -265,14 +265,14 @@ impl WasmSandboxWorker {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct WasmSkillRegistry {
     skills: BTreeMap<String, WasmSkill>,
 }
 
 impl WasmSkillRegistry {
     pub fn new() -> Self {
-        Self { skills: BTreeMap::new() }
+        Self::default()
     }
 
     pub fn register(&mut self, skill: WasmSkill) -> Result<(), String> {

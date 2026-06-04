@@ -1,3 +1,5 @@
+#![deny(clippy::disallowed_types)]
+
 use prometheus::{
     self, CounterVec, GaugeVec, HistogramVec, Registry, Encoder, TextEncoder,
     Opts, HistogramOpts,

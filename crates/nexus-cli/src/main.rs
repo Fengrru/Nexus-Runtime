@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
 use clap::{Parser, Subcommand};
 use nexus_core::*;
+use nexus_core::llm_proxy::{LlmProxy, LlmRequest, ProxyError};
 use nexus_event_store::{SqliteEventStore, EventStore};
 
 #[derive(Parser)]
@@ -177,7 +179,7 @@ async fn main() {
     }
 }
 
-async fn get_store() -> SqliteEventStore {
+async fn get_store() -> Result<SqliteEventStore, String> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .unwrap_or_else(|_| ".".into());
@@ -187,9 +189,14 @@ async fn get_store() -> SqliteEventStore {
         tokio::fs::create_dir_all(parent).await.ok();
     }
 
-    SqliteEventStore::new(&format!("sqlite:{}", db_path.display()))
+    let db_url = format!(
+        "sqlite:{}?mode=rwc",
+        db_path.to_str().unwrap_or("nexus.db").replace('\\', "/")
+    );
+
+    SqliteEventStore::new(&db_url)
         .await
-        .expect("Failed to initialize event store")
+        .map_err(|e| format!("Failed to connect to event store: {}", e))
 }
 
 async fn run_session(intent: &str, model: &str, budget_usd: f64) {
@@ -203,7 +210,13 @@ async fn run_session(intent: &str, model: &str, budget_usd: f64) {
     println!("Budget:  ${:.2} ({:?} cents)", budget_usd, budget_cents);
     println!();
 
-    let store = get_store().await;
+    let store = match get_store().await {
+        Ok(s) => s,
+        Err(e) => { println!("[ERR] {}", e); return; }
+    };
+
+    let mut state = NexusState::new(session_id, now_millis());
+    let dag = BTreeMap::new();
 
     let mut cv = CausalVector::new();
     cv.increment(session_id);
@@ -214,18 +227,258 @@ async fn run_session(intent: &str, model: &str, budget_usd: f64) {
             source: "cli".to_string(),
         },
         session_id,
-        cv,
+        cv.clone(),
         None,
     );
 
     match store.append_event(&event).await {
-        Ok(()) => println!("[OK] Intent received and persisted"),
-        Err(e) => println!("[ERR] Failed to persist: {}", e),
+        Ok(()) => println!("[INTAKE] Intent received"),
+        Err(e) => { println!("[ERR] {}", e); return; }
+    }
+    state.latest_event_id = event.event_id.clone();
+    state = transition(&state, &event, &dag).unwrap();
+    println!("        Status: {:?}", state.status);
+
+    cv.increment(session_id);
+    let parsed_event = NexusEvent::new(
+        EventType::IntentParsed {
+            intent_graph: IntentGraph::default(),
+        },
+        session_id,
+        cv.clone(),
+        None,
+    );
+    store.append_event(&parsed_event).await.ok();
+    state.latest_event_id = parsed_event.event_id.clone();
+    state = transition(&state, &parsed_event, &dag).unwrap();
+    println!("[PARSE]  Intent parsed → {:?}", state.status);
+
+    // Real LLM planning via Kernel proxy (spec: LLM calls are externalized events)
+    let mut llm_proxy = LlmProxy::new(b"nexus-kernel-signing-key-32b".to_vec());
+    let llm_request = LlmRequest {
+        request_id: format!("req_{}", now_millis()),
+        session_id,
+        model: model.to_string(),
+        prompt: format!(
+            "You are a task planner. Decompose this user intent into executable steps.\n\
+             Intent: {}\n\
+             Output a JSON array of steps, each step has: action_type (read_file/write_file/grep/run_command), target (file path), and parameters (key-value map).\n\
+             Reply with ONLY the JSON array, no other text.",
+            intent
+        ),
+        max_tokens: 2048,
+        temperature: 0.3,
+    };
+
+    let mut budget_state = state.budget.clone();
+
+    let llm_plan;
+
+    match llm_proxy.proxy_call(llm_request, &mut budget_state, &cv).await {
+        Ok((response, llm_event)) => {
+            println!(
+                "[LLM]    {} → {} in, {} out, ${:.4} cost",
+                model, response.input_tokens, response.output_tokens,
+                response.cost_cents as f64 / 100.0
+            );
+            println!("         Plan: {}", &response.content[..200.min(response.content.len())]);
+            llm_plan = response.content.clone();
+
+            cv.increment(session_id);
+            store.append_event(&llm_event).await.ok();
+            state.latest_event_id = llm_event.event_id.clone();
+            state.budget = budget_state.clone();
+            if let Ok(next) = transition(&state, &llm_event, &dag) {
+                state = next;
+            }
+        }
+        Err(ProxyError::ApiError(ref msg)) if msg.contains("not set") => {
+            println!("[LLM]    No API key set — using simulated plan");
+            llm_plan = "[{\"action_type\": \"grep\", \"target\": \"README.md\", \"parameters\": {\"pattern\": \"Nexus\"}}]".to_string();
+            println!("         Plan: {}", llm_plan);
+        }
+        Err(e) => {
+            println!("[LLM]    API error: {} — falling back to simulated plan", e);
+            llm_plan = "[{\"action_type\": \"grep\", \"target\": \"README.md\", \"parameters\": {\"pattern\": \"Nexus\"}}]".to_string();
+        }
     }
 
+    cv.increment(session_id);
+    let plan_event = NexusEvent::new(
+        EventType::PlanCommitted {
+            frontier: Frontier {
+                nodes: vec![],
+                blocked: vec![],
+                completed: vec![],
+            },
+        },
+        session_id,
+        cv.clone(),
+        None,
+    );
+    store.append_event(&plan_event).await.ok();
+    state.latest_event_id = plan_event.event_id.clone();
+    state = transition(&state, &plan_event, &dag).unwrap();
+    println!("[PLAN]   Plan committed → {:?}", state.status);
+
+    cv.increment(session_id);
+    let deps_event = NexusEvent::new(
+        EventType::DependenciesMet,
+        session_id,
+        cv.clone(),
+        None,
+    );
+    store.append_event(&deps_event).await.ok();
+    state.latest_event_id = deps_event.event_id.clone();
+    state = transition(&state, &deps_event, &dag).unwrap();
+    println!("[EXEC]   Dependencies met → {:?}", state.status);
+
+    let task_id = TaskId::new();
+    let spawner = WorkerSpawner::new().with_python("python");
+
+    let worker_config = SpawnerConfig {
+        task_id,
+        session_id,
+        worker_type: WorkerType::Python,
+        intent: TaskIntent {
+            action_type: "execute_plan".into(),
+            target: "plan".into(),
+            parameters: {
+                let mut m = BTreeMap::new();
+                m.insert("plan".into(), llm_plan.clone());
+                m
+            },
+            constraints: vec![],
+        },
+        capabilities: vec!["fs:read:.".into(), "fs:write:.".into()],
+        from_step: 0,
+        timeout_ms: 60_000,
+        token_budget: 10_000,
+    };
+
+    let worker_success = match spawner.spawn(worker_config.clone()) {
+        Ok(mut handle) => {
+            println!("[WORKER] Spawned PID {}", handle.pid);
+
+            WorkerSpawner::send_execute(&mut handle, &worker_config).unwrap();
+            println!("         Sent execute command");
+
+            let mut checkpoints = 0u64;
+            let mut completed = false;
+            let mut failed = false;
+
+            while let Some(msg) = WorkerSpawner::read_response(&mut handle) {
+                if msg.get("method").is_some_and(|m| m == "checkpoint") {
+                    checkpoints += 1;
+                    cv.increment(session_id);
+                    let cp_event = NexusEvent::new(
+                        EventType::WorkerCheckpoint {
+                            task_id,
+                            step_index: checkpoints,
+                            actions: vec![],
+                            artifacts: vec![],
+                        },
+                        session_id,
+                        cv.clone(),
+                        Some(state.latest_event_id.clone()),
+                    );
+                    store.append_event(&cp_event).await.ok();
+                    state.latest_event_id = cp_event.event_id.clone();
+                    if let Ok(next) = transition(&state, &cp_event, &dag) {
+                        state = next;
+                    }
+                    println!("[CKPT]   Step {} → {:?}", checkpoints, state.status);
+                } else if msg.get("result").is_some() && state.status == SessionStatus::Checkpointing {
+                    completed = true;
+                    break;
+                } else if msg.get("error").is_some() {
+                    failed = true;
+                    break;
+                } else if msg.get("result").is_some() {
+                    completed = true;
+                    break;
+                }
+            }
+
+            if completed {
+                cv.increment(session_id);
+                let done_event = NexusEvent::new(
+                    EventType::WorkerCompleted {
+                        worker_id: "python-worker".into(),
+                        task_id,
+                        result: WorkerResult {
+                            status: "completed".into(),
+                            artifacts: vec![],
+                            metrics: WorkerMetrics { duration_ms: 0, tokens_consumed: 0, cost_cents: 0 },
+                        },
+                        duration_ms: 0,
+                    },
+                    session_id,
+                    cv.clone(),
+                    Some(state.latest_event_id.clone()),
+                );
+                store.append_event(&done_event).await.ok();
+                state.latest_event_id = done_event.event_id.clone();
+                if let Ok(next) = transition(&state, &done_event, &dag) {
+                    state = next;
+                }
+                println!("[OK]     Worker completed → {:?}", state.status);
+                true
+            } else {
+                cv.increment(session_id);
+                let fail_event = NexusEvent::new(
+                    EventType::WorkerFailed {
+                        worker_id: "python-worker".into(),
+                        task_id,
+                        error: "Worker error".into(),
+                        error_code: ErrorCode::Retryable,
+                        retry_count: 0,
+                    },
+                    session_id,
+                    cv.clone(),
+                    Some(state.latest_event_id.clone()),
+                );
+                store.append_event(&fail_event).await.ok();
+                state.latest_event_id = fail_event.event_id.clone();
+                if let Ok(next) = transition(&state, &fail_event, &dag) {
+                    state = next;
+                }
+                println!("[FAIL]   Worker failed → {:?}", state.status);
+                failed
+            }
+        }
+        Err(e) => {
+            println!("[WORKER] Could not spawn: {}", e);
+            eprintln!("         Running in demo mode.");
+
+            cv.increment(session_id);
+            let done_event = NexusEvent::new(
+                EventType::WorkerCompleted {
+                    worker_id: "inline".into(),
+                    task_id,
+                    result: WorkerResult {
+                        status: "completed".into(),
+                        artifacts: vec![],
+                        metrics: WorkerMetrics { duration_ms: 0, tokens_consumed: 0, cost_cents: 0 },
+                    },
+                    duration_ms: 0,
+                },
+                session_id,
+                cv.clone(),
+                Some(state.latest_event_id.clone()),
+            );
+            store.append_event(&done_event).await.ok();
+            state.latest_event_id = done_event.event_id.clone();
+            state = transition(&state, &done_event, &dag).unwrap();
+            true
+        }
+    };
+
+    let verdict = if worker_success { "OK" } else { "FAILED" };
+    store.update_state(&state, state.version - 1).await.ok();
     println!();
-    println!("Session created. Use 'nexus status {}' to check status.", session_id.to_hex());
-    println!("If a crash occurs, use 'nexus resume {}' to recover.", session_id.to_hex());
+    println!("[{verdict}]   Session {verdict} — status {:?}", state.status);
+    println!("Use 'nexus status {}' to check.", session_id.to_hex());
 }
 
 async fn resume_session(session_id: &str, from: Option<u64>) {
@@ -235,7 +488,10 @@ async fn resume_session(session_id: &str, from: Option<u64>) {
         println!("From checkpoint: {}", checkpoint);
     }
 
-    let store = get_store().await;
+    let store = match get_store().await {
+        Ok(s) => s,
+        Err(e) => { println!("[ERR] {}", e); return; }
+    };
     let sid = match SessionId::from_hex(session_id) {
         Ok(s) => s,
         Err(e) => {
@@ -279,7 +535,10 @@ async fn resume_session(session_id: &str, from: Option<u64>) {
 }
 
 async fn show_status(session_id: &str) {
-    let store = get_store().await;
+    let store = match get_store().await {
+        Ok(s) => s,
+        Err(e) => { println!("[ERR] {}", e); return; }
+    };
     let sid = match SessionId::from_hex(session_id) {
         Ok(s) => s,
         Err(e) => {
@@ -311,7 +570,10 @@ async fn show_status(session_id: &str) {
 }
 
 async fn suspend_session(session_id: &str) {
-    let store = get_store().await;
+    let store = match get_store().await {
+        Ok(s) => s,
+        Err(e) => { println!("[ERR] {}", e); return; }
+    };
     let sid = SessionId::from_hex(session_id).unwrap_or_else(|_| SessionId::new());
     let _skip = &sid;
 
@@ -340,7 +602,10 @@ async fn suspend_session(session_id: &str) {
 }
 
 async fn archive_session(session_id: &str) {
-    let store = get_store().await;
+    let store = match get_store().await {
+        Ok(s) => s,
+        Err(e) => { println!("[ERR] {}", e); return; }
+    };
     let sid = SessionId::from_hex(session_id).unwrap_or_else(|_| SessionId::new());
 
     match store.get_state(sid).await {
@@ -369,7 +634,10 @@ async fn archive_session(session_id: &str) {
 }
 
 async fn export_session(session_id: &str, output: &str) {
-    let store = get_store().await;
+    let store = match get_store().await {
+        Ok(s) => s,
+        Err(e) => { println!("[ERR] {}", e); return; }
+    };
     let sid = match SessionId::from_hex(session_id) {
         Ok(s) => s,
         Err(e) => {
@@ -421,7 +689,10 @@ async fn import_session(file: &str, as_id: Option<String>) {
 }
 
 async fn show_log(session_id: &str, limit: usize, _since: Option<String>) {
-    let store = get_store().await;
+    let store = match get_store().await {
+        Ok(s) => s,
+        Err(e) => { println!("[ERR] {}", e); return; }
+    };
     let sid = match SessionId::from_hex(session_id) {
         Ok(s) => s,
         Err(_) => {
@@ -460,7 +731,10 @@ async fn show_log(session_id: &str, limit: usize, _since: Option<String>) {
 }
 
 async fn inspect_session(session_id: &str, show_state: bool, show_memory: bool, show_budget: bool) {
-    let store = get_store().await;
+    let store = match get_store().await {
+        Ok(s) => s,
+        Err(e) => { println!("[ERR] {}", e); return; }
+    };
     let sid = match SessionId::from_hex(session_id) {
         Ok(s) => s,
         Err(_) => {

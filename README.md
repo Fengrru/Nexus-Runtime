@@ -1,75 +1,57 @@
-# Nexus Runtime v1.0
+# Nexus Runtime
 
-**Causally-consistent, crash-recoverable, deterministic execution substrate for autonomous agent systems.**
+Causally-consistent execution substrate for autonomous agent systems.
 
-Nexus is not an agent framework. It is infrastructure that makes agent execution durable, auditable, and portable.
+**Event log is the source of truth. State is a materialized view. Workers are stateless. The Kernel owns causality.**
 
 ## Quick Start
 
 ```bash
 # Build
-cargo build --release
+cargo build --bin nexus
 
-# Run tests (including Phoenix recovery tests)
+# Run a session
+./target/debug/nexus run "your intent here"
+
+# Check status
+./target/debug/nexus status <session-id>
+
+# View event log
+./target/debug/nexus log <session-id>
+
+# Simulate crash recovery
+./target/debug/nexus resume <session-id>
+
+# Run all tests
 cargo test
-
-# Phoenix invariant tests
-cargo test --package phoenix-tests
-
-# Run demo
-./scripts/demo.sh
-
-# CLI usage
-nexus run "refactor authentication to JWT" --budget 5.00
-nexus status <session-id>
-nexus resume <session-id>
 ```
 
 ## Architecture
 
 ```
-L5: Agent Interface Adapters (OpenClaw, Hermes, Cursor, Claude Code)
-L4: Nexus Kernel (State Machine, Event Store, Scheduler, Entropy, Cost Governor)
-L3: Worker Fabric (Python, Node.js, Rust, WASM — JSON-RPC over stdio)
-L2: Causal Memory & Persistence (Event Log, Memory Graph, Content Vault)
-L1: External Toolchain (MCP, LLM APIs, GitHub/Email)
+L5: Agent Interface Adapters (OpenClaw / Hermes / CLI)
+L4: Nexus Kernel — Causal State Machine, Event Store, Recovery, Worker Scheduler
+L3: Worker Fabric — Python / Node.js / Rust / WASM (JSON-RPC 2.0 over stdio)
+L2: Causal Memory & Persistence — Event Log, Memory Graph, Vector Index, Content Vault
+L1: External Toolchain — MCP Servers, LLM APIs, GitHub/Email/Browser
 ```
 
 ## Core Principles
 
-1. **Event Log is Source of Truth** — All state mutations append to immutable log
-2. **State is Materialized View** — Deletable, rebuildable from events
-3. **transition() is Pure Function** — No IO, no clock, no random
-4. **Workers are Stateless** — No network, no persistent state
-5. **Crash Recovery (Phoenix)** — Survive kill -9 without LLM re-calls
+- `transition()` is a pure function — no async, no I/O, no clock, no random
+- Event log is append-only, immutable
+- Deterministic serialization (BTreeMap, u64, rmp-serde)
+- Workers are stateless — no persistent memory, no network, no direct LLM
+- All side effects go through two-phase intent protocol
 
 ## Deployment Modes
 
-| Mode | Storage | Scheduler | Infrastructure |
-|------|---------|-----------|----------------|
-| Lite | SQLite (WAL) | Local process | Zero |
-| Pro | PostgreSQL | Docker | Docker |
-| Enterprise | PostgreSQL + Temporal | Kubernetes | K8s + Temporal |
-
-## Crates
-
-| Crate | Description |
-|-------|-------------|
-| `nexus-core` | State machine, types, event system, recovery, effects |
-| `nexus-event-store` | SQLite/PostgreSQL event store implementations |
-| `nexus-rpc` | JSON-RPC 2.0 codec for Worker communication |
-| `nexus-security` | Capability tokens (HMAC-SHA256), sandboxing |
-| `nexus-scheduler` | Topological + capability-aware task scheduling |
-| `phoenix-tests` | 8-invariant crash recovery test framework |
-
-## Phoenix Recovery Guarantees
-
-The system survives `kill -9` at any execution step and resumes without:
-- Re-calling LLMs (cached results)
-- Duplicating side effects (2-phase intent protocol)
-- Losing causal ordering (vector clocks)
-- State corruption (event-sourced replay)
+| Mode | Storage | Scheduler | Use Case |
+|------|---------|-----------|----------|
+| Lite | SQLite (WAL) | Local process | Personal CLI tools |
+| Pro | PostgreSQL | Docker containers | Team collaboration |
+| Enterprise | PostgreSQL + Temporal | Kubernetes | Production multi-agent |
 
 ## License
 
-MIT OR Apache-2.0 (dual-licensed)
+MIT OR Apache-2.0

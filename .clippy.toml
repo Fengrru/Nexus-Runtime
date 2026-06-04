@@ -1,0 +1,7 @@
+# Nexus Runtime — Clippy Configuration
+# Disallowed types that break determinism guarantees
+
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "Use BTreeMap for deterministic ordering" },
+    { path = "std::collections::HashSet", reason = "Use BTreeSet for deterministic ordering" },
+]

@@ -46,13 +46,19 @@ pub struct WorkerSpawner {
     workers: Arc<Mutex<BTreeMap<TaskId, WorkerHandle>>>,
 }
 
-impl WorkerSpawner {
-    pub fn new() -> Self {
+impl Default for WorkerSpawner {
+    fn default() -> Self {
         Self {
             python_path: "python3".into(),
             node_path: "node".into(),
             workers: Arc::new(Mutex::new(BTreeMap::new())),
         }
+    }
+}
+
+impl WorkerSpawner {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn with_python(mut self, path: &str) -> Self {
@@ -181,7 +187,7 @@ impl WorkerSpawner {
                 }
                 match serde_json::from_str::<serde_json::Value>(trimmed) {
                     Ok(msg) => {
-                        if msg.get("method").map_or(false, |m| m == "checkpoint") {
+                        if msg.get("method").is_some_and(|m| m == "checkpoint") {
                             handle.status = WorkerStatus::Checkpointing;
                         }
                         if msg.get("error").is_some() {

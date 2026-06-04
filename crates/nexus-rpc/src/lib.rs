@@ -1,3 +1,5 @@
+#![deny(clippy::disallowed_types)]
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -178,12 +180,7 @@ impl RpcCodec {
                 for (k, v) in obj {
                     sorted.insert(k.clone(), Self::canonicalize_worker_payload(v));
                 }
-                Value::Object(
-                    sorted
-                        .into_iter()
-                        .map(|(k, v)| (k, v))
-                        .collect(),
-                )
+                Value::Object(sorted.into_iter().collect())
             }
             Value::Array(arr) => {
                 Value::Array(arr.iter().map(Self::canonicalize_worker_payload).collect())

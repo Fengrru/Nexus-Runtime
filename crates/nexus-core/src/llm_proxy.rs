@@ -55,6 +55,7 @@ impl LlmProxy {
         &mut self,
         request: LlmRequest,
         budget: &mut BudgetState,
+        causal_vector: &CausalVector,
     ) -> Result<(LlmResponse, NexusEvent), ProxyError> {
         let prompt_hash = compute_hash(request.prompt.as_bytes());
 
@@ -71,6 +72,7 @@ impl LlmProxy {
                 &entry.response,
                 &prompt_hash,
                 true,
+                causal_vector,
             )?));
         }
 
@@ -114,7 +116,7 @@ impl LlmProxy {
             hit_count: 0,
         });
 
-        let event = self.build_llm_event(&request, &response, &prompt_hash, false)?;
+        let event = self.build_llm_event(&request, &response, &prompt_hash, false, causal_vector)?;
 
         tracing::info!(
             target = "nexus.llm_proxy",
@@ -155,6 +157,8 @@ impl LlmProxy {
 
         if model_lower.contains("claude") {
             self.call_anthropic_api(request).await
+        } else if model_lower.starts_with("deepseek") {
+            self.call_deepseek_api(request).await
         } else if model_lower.starts_with("gpt") || model_lower.starts_with("o1") || model_lower.starts_with("o3") {
             self.call_openai_api(request).await
         } else {
@@ -207,6 +211,66 @@ impl LlmProxy {
         let input_tokens = data["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
         let output_tokens = data["usage"]["completion_tokens"].as_u64().unwrap_or(0);
         let cost_cents = self.estimate_openai_cost(&request.model, input_tokens, output_tokens);
+
+        let response_hash = compute_hash(content.as_bytes());
+
+        Ok(LlmResponse {
+            request_id: request.request_id.clone(),
+            model: request.model.clone(),
+            content,
+            input_tokens,
+            output_tokens,
+            cost_cents,
+            response_hash,
+            latency_ms: 0,
+        })
+    }
+
+    async fn call_deepseek_api(&self, request: &LlmRequest) -> Result<LlmResponse, ProxyError> {
+        let api_key = std::env::var("DEEPSEEK_API_KEY")
+            .map_err(|_| ProxyError::ApiError("DEEPSEEK_API_KEY not set".into()))?;
+
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "model": request.model,
+            "messages": [
+                {"role": "user", "content": request.prompt}
+            ],
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+        });
+
+        let resp = client
+            .post("https://api.deepseek.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProxyError::ApiError(format!("DeepSeek request failed: {}", e)))?;
+
+        if resp.status() == 429 {
+            return Err(ProxyError::RateLimited);
+        }
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ProxyError::ApiError(format!("DeepSeek HTTP {}: {}", status, text)));
+        }
+
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| ProxyError::ApiError(format!("DeepSeek response parse: {}", e)))?;
+
+        let content = data["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let input_tokens = data["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
+        let output_tokens = data["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+        let cost_cents = self.estimate_deepseek_cost(&request.model, input_tokens, output_tokens);
 
         let response_hash = compute_hash(content.as_bytes());
 
@@ -310,9 +374,21 @@ impl LlmProxy {
         (cost * 100.0).ceil() as u64
     }
 
+    fn estimate_deepseek_cost(&self, model: &str, input_tokens: u64, output_tokens: u64) -> u64 {
+        let (input_per_1m, output_per_1m): (f64, f64) = match model {
+            m if m.contains("deepseek-chat") || m.contains("deepseek-v3") => (0.27, 1.10),
+            m if m.contains("deepseek-reasoner") || m.contains("deepseek-r1") => (0.55, 2.19),
+            _ => (0.27, 1.10),
+        };
+        let cost = (input_tokens as f64 / 1_000_000.0) * input_per_1m
+            + (output_tokens as f64 / 1_000_000.0) * output_per_1m;
+        (cost * 100.0).ceil() as u64
+    }
+
     fn estimate_cost(&self, model: &str, tokens: u64) -> u64 {
         let cost_per_1k: f64 = match model {
             m if m.contains("claude") => 0.015,
+            m if m.contains("deepseek") => 0.001,
             m if m.contains("gpt-4") => 0.03,
             m if m.contains("gpt-3.5") => 0.002,
             _ => 0.01,
@@ -326,8 +402,9 @@ impl LlmProxy {
         response: &LlmResponse,
         _prompt_hash: &str,
         _cached: bool,
+        causal_vector: &CausalVector,
     ) -> Result<NexusEvent, ProxyError> {
-        let mut cv = CausalVector::new();
+        let mut cv = causal_vector.clone();
         cv.increment(request.session_id);
 
         let event = NexusEvent::new(
@@ -463,10 +540,11 @@ mod tests {
             };
 
             // First call — simulate API
-            let (resp1, _) = proxy.proxy_call(req.clone(), &mut budget).await.unwrap();
+            let cv = CausalVector::new();
+            let (resp1, _) = proxy.proxy_call(req.clone(), &mut budget, &cv).await.unwrap();
 
             // Second call — should be cached
-            let (resp2, _) = proxy.proxy_call(req, &mut budget).await.unwrap();
+            let (resp2, _) = proxy.proxy_call(req, &mut budget, &cv).await.unwrap();
 
             assert_eq!(resp1.response_hash, resp2.response_hash,
                 "Cached response must be identical"
@@ -495,7 +573,8 @@ mod tests {
                 temperature: 0.7,
             };
 
-            let result = proxy.proxy_call(req, &mut budget).await;
+            let cv = CausalVector::new();
+            let result = proxy.proxy_call(req, &mut budget, &cv).await;
             assert!(result.is_err());
         });
     }

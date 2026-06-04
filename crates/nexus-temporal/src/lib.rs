@@ -1,3 +1,5 @@
+#![deny(clippy::disallowed_types)]
+
 use async_trait::async_trait;
 use nexus_core::*;
 use nexus_event_store::{EventStore, StoreError};
