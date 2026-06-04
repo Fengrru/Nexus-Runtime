@@ -7,4 +7,8 @@ license.workspace = true
 [dependencies]
 nexus-core = { path = "../../crates/nexus-core" }
 serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

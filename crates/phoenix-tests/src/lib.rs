@@ -1244,4 +1244,195 @@ mod integration {
 
         assert!(cv_a.is_consistent());
     }
+
+    #[tokio::test]
+    async fn cross_tool_session_migration_openclaw_to_hermes() {
+        let sid = SessionId::from_bytes([0x10; 16]);
+
+        // Session driven through full lifecycle: Created → Intake → Planning → Planned → Executing → Checkpoint
+        let mut cv = CausalVector::new();
+        cv.increment(sid);
+        let e1 = NexusEvent::new(
+            EventType::IntentReceived {
+                raw_input: "refactor auth".into(),
+                source: "openclaw:discord".into(),
+            },
+            sid, cv.clone(), None,
+        );
+
+        cv.increment(sid);
+        let e2 = NexusEvent::new(
+            EventType::IntentParsed {
+                intent_graph: IntentGraph::default(),
+            },
+            sid, cv.clone(), None,
+        );
+
+        cv.increment(sid);
+        let e3 = NexusEvent::new(
+            EventType::PlanCommitted {
+                frontier: Frontier::empty(),
+            },
+            sid, cv.clone(), None,
+        );
+
+        cv.increment(sid);
+        let e4 = NexusEvent::new(
+            EventType::DependenciesMet,
+            sid, cv.clone(), None,
+        );
+
+        cv.increment(sid);
+        let e5 = NexusEvent::new(
+            EventType::WorkerCheckpoint {
+                task_id: TaskId::from_bytes([3u8; 16]),
+                step_index: 1,
+                actions: vec![],
+                artifacts: vec![],
+            },
+            sid, cv.clone(), None,
+        );
+
+        let events = vec![e1, e2, e3, e4, e5];
+
+        // Export from OpenClaw world
+        let export = SessionExport::from_session(&events, sid, MemoryGraph::default(), cv);
+        assert!(export.verify_integrity().is_ok());
+        assert!(export.verify_export_hash().is_ok());
+
+        // Store export as JSON (simulating file transfer between tools)
+        let json = export.to_json().unwrap();
+
+        // Re-import in Hermes world
+        let reimported = SessionExport::from_json(&json).unwrap();
+        assert_eq!(reimported.version, "1.0.0");
+        assert_eq!(reimported.session_id, sid.to_hex());
+
+        // Verify hash integrity after import
+        assert!(reimported.verify_export_hash().is_ok());
+
+        // Replay state in new environment
+        let state = reimported.replay_into_state().unwrap();
+        assert_eq!(state.session_id, sid);
+        assert_eq!(state.checkpoint_seq, 1);
+    }
+
+    #[tokio::test]
+    async fn cross_tool_session_migration_with_memories() {
+        let sid_src = SessionId::from_bytes([0xAA; 16]);
+
+        let mut source_mem = MemoryGraph::new();
+        source_mem.add_node(MemoryNode {
+            id: "best_practice_001".into(),
+            content: MemoryContent::Text {
+                text: "Always use JWT over session tokens".into(),
+            },
+            embedding: None,
+            causal_context: CausalVector::new(),
+            importance: 900,
+            activation: 0,
+            source_event_id: "evt_123".into(),
+            session_lineage: vec![],
+            created_at: now_millis(),
+        });
+
+        let mut cv = CausalVector::new();
+        cv.increment(sid_src);
+        let event = NexusEvent::new(
+            EventType::IntentReceived {
+                raw_input: "knowledge transfer".into(),
+                source: "tool_a".into(),
+            },
+            sid_src,
+            cv.clone(),
+            None,
+        );
+
+        let export = SessionExport::from_session(&[event], sid_src, source_mem, cv);
+
+        // Export as file (simulating export from tool A)
+        let export_path = std::env::temp_dir().join("nexus_migration_test.nexus");
+        export.to_file(export_path.to_str().unwrap()).unwrap();
+
+        // Tool B imports
+        let imported = SessionExport::from_file(export_path.to_str().unwrap()).unwrap();
+        assert!(imported.verify_integrity().is_ok());
+        assert!(imported.verify_export_hash().is_ok());
+        assert!(!imported.memory_graph.nodes.is_empty());
+
+        // Cleanup
+        std::fs::remove_file(&export_path).ok();
+    }
+
+    #[tokio::test]
+    async fn cross_tool_migration_idempotent_reimport() {
+        let sid = SessionId::from_bytes([0xCC; 16]);
+        let export = SessionExport::from_session(
+            &[NexusEvent::new(
+                EventType::IntentReceived {
+                    raw_input: "idempotent test".into(),
+                    source: "tool_a".into(),
+                },
+                sid,
+                {
+                    let mut c = CausalVector::new();
+                    c.increment(sid);
+                    c
+                },
+                None,
+            )],
+            sid,
+            MemoryGraph::default(),
+            CausalVector::singleton(sid, 1),
+        );
+
+        let json = export.to_json().unwrap();
+
+        // Import twice — should produce identical results
+        let import1 = SessionExport::from_json(&json).unwrap();
+        let import2 = SessionExport::from_json(&json).unwrap();
+
+        assert_eq!(import1.export_hash, import2.export_hash);
+        assert_eq!(import1.session_id, import2.session_id);
+        assert_eq!(import1.events.len(), import2.events.len());
+
+        let state1 = import1.replay_into_state().unwrap();
+        let state2 = import2.replay_into_state().unwrap();
+        assert_eq!(state1.status, state2.status);
+        assert_eq!(state1.version, state2.version);
+    }
+
+    #[tokio::test]
+    async fn cross_tool_migration_export_tamper_detection() {
+        let sid = SessionId::from_bytes([0xDD; 16]);
+        let mut cv = CausalVector::new();
+        cv.increment(sid);
+
+        let export = SessionExport::from_session(
+            &[NexusEvent::new(
+                EventType::IntentReceived {
+                    raw_input: "tamper test".into(),
+                    source: "tool_a".into(),
+                },
+                sid,
+                cv,
+                None,
+            )],
+            sid,
+            MemoryGraph::default(),
+            CausalVector::singleton(sid, 1),
+        );
+
+        assert!(export.verify_export_hash().is_ok());
+
+        // Tamper with the struct directly
+        let mut tampered = export.clone();
+        tampered.session_id = "tampered_session_id".into();
+
+        // Hash verification must fail
+        assert!(
+            tampered.verify_export_hash().is_err(),
+            "Tampered export must fail hash verification"
+        );
+    }
 }

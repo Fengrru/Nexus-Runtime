@@ -84,6 +84,26 @@ impl SessionExport {
         Ok(())
     }
 
+    pub fn verify_export_hash(&self) -> Result<(), String> {
+        if self.export_hash.is_empty() {
+            return Err("export has no hash to verify".into());
+        }
+
+        let mut hashless = self.clone();
+        hashless.export_hash = String::new();
+
+        let export_bytes = serialize_deterministic(&hashless).unwrap_or_default();
+        let recomputed = compute_hash(&export_bytes);
+        if recomputed != self.export_hash {
+            return Err(format!(
+                "export hash mismatch: expected {}, got {}",
+                self.export_hash, recomputed
+            ));
+        }
+
+        Ok(())
+    }
+
     pub fn replay_into_state(&self) -> Result<NexusState, String> {
         let session_id = SessionId::from_hex(&self.session_id)
             .map_err(|e| format!("invalid session ID: {}", e))?;
@@ -275,5 +295,22 @@ mod tests {
 
         assert_eq!(export.session_id, reloaded.session_id);
         assert_eq!(export.export_hash, reloaded.export_hash);
+        assert!(reloaded.verify_export_hash().is_ok());
+    }
+
+    #[test]
+    fn test_export_hash_tamper_detection() {
+        let sid = SessionId::from_bytes([1u8; 16]);
+        let mut export = SessionExport::from_session(
+            &[],
+            sid,
+            MemoryGraph::default(),
+            CausalVector::new(),
+        );
+
+        assert!(export.verify_export_hash().is_ok());
+
+        export.session_id = "tampered".into();
+        assert!(export.verify_export_hash().is_err());
     }
 }
