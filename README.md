@@ -58,25 +58,25 @@ $ nexus resume <session-id>
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ L5: Agent Interface Adapters                              │
-│    OpenClaw Gateway / Hermes CLI / Nexus CLI              │
+│ L5: Agent Interface Adapters                             │
+│    OpenClaw Gateway / Hermes CLI / Nexus CLI             │
 ├──────────────────────────────────────────────────────────┤
-│ L4: Nexus Kernel (Rust)                                   │
-│    Causal State Machine · Event Store · Recovery Manager  │
-│    Worker Scheduler · Entropy Controller · Side-Effect    │
-│    Guard · Cost Governor · LLM Proxy                      │
+│ L4: Nexus Kernel (Rust)                                  │
+│    Causal State Machine · Event Store · Recovery Manager │
+│    Worker Scheduler · Entropy Controller · Side-Effect   │
+│    Guard · Cost Governor · LLM Proxy                     │
 ├──────────────────────────────────────────────────────────┤
-│ L3: Worker Fabric                                         │
+│ L3: Worker Fabric                                        │
 │    Python · Node.js · Rust · WASM (JSON-RPC 2.0 / stdio) │
-│    No ports, no network access, no persistent state       │
+│    No ports, no network access, no persistent state      │
 ├──────────────────────────────────────────────────────────┤
-│ L2: Causal Memory & Persistence                           │
-│    Event Log · Memory Graph · Content Vault (BLAKE3)      │
-│    Vector Clock · Two-Phase Commit                        │
+│ L2: Causal Memory & Persistence                          │
+│    Event Log · Memory Graph · Content Vault (BLAKE3)     │
+│    Vector Clock · Two-Phase Commit                       │
 ├──────────────────────────────────────────────────────────┤
-│ L1: External Toolchain                                    │
-│    LLM APIs (OpenAI / Anthropic / DeepSeek)               │
-│    Docker / Kubernetes · OPA/Rego Policies                │
+│ L1: External Toolchain                                   │
+│    LLM APIs (OpenAI / Anthropic / DeepSeek)              │
+│    Docker / Kubernetes · OPA/Rego Policies               │
 └──────────────────────────────────────────────────────────┘
 ```
 
