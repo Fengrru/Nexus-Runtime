@@ -1,0 +1,23 @@
+# Auto-detect text files and normalize to LF
+* text=auto
+
+# Source code — always LF
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.sql text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.rego text eol=lf
+
+# Binary files
+*.msgpack binary
+*.db binary
+*.png binary
+*.ico binary
