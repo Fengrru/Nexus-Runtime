@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use nexus_core::{NexusEvent, NexusState, SessionId, SideEffectIntent, LlmCallRecord, ArtifactRef, LockMode};
+use nexus_core::{
+    ArtifactRef, LlmCallRecord, LockMode, NexusEvent, NexusState, SessionId, SideEffectIntent,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -49,16 +51,9 @@ pub trait EventStore: Send + Sync + 'static {
         expected_version: u64,
     ) -> Result<bool, StoreError>;
 
-    async fn record_side_effect_intent(
-        &self,
-        intent: &SideEffectIntent,
-    ) -> Result<(), StoreError>;
+    async fn record_side_effect_intent(&self, intent: &SideEffectIntent) -> Result<(), StoreError>;
 
-    async fn commit_side_effect(
-        &self,
-        id: &[u8],
-        response_hash: &str,
-    ) -> Result<(), StoreError>;
+    async fn commit_side_effect(&self, id: &[u8], response_hash: &str) -> Result<(), StoreError>;
 
     async fn acquire_lock(
         &self,

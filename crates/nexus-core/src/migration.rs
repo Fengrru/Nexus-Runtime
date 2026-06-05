@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
-use crate::types::*;
 use crate::event::{EventType, NexusEvent};
 use crate::state_machine::transition;
-use serde::{Serialize, Deserialize};
+use crate::types::*;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossNodeSession {
@@ -124,13 +124,11 @@ impl CrossNodeSession {
     }
 
     pub fn to_binary(&self) -> Result<Vec<u8>, String> {
-        rmp_serde::to_vec(self)
-            .map_err(|e| format!("binary serialization error: {}", e))
+        rmp_serde::to_vec(self).map_err(|e| format!("binary serialization error: {}", e))
     }
 
     pub fn from_binary(data: &[u8]) -> Result<Self, String> {
-        rmp_serde::from_slice(data)
-            .map_err(|e| format!("binary deserialization error: {}", e))
+        rmp_serde::from_slice(data).map_err(|e| format!("binary deserialization error: {}", e))
     }
 }
 
@@ -155,21 +153,13 @@ impl SessionMigrationManager {
         events: &[NexusEvent],
     ) -> Result<CrossNodeSession, String> {
         if !self.peer_nodes.contains(&target_node) {
-            return Err(format!(
-                "target node {} is not a known peer",
-                target_node
-            ));
+            return Err(format!("target node {} is not a known peer", target_node));
         }
 
         let target_for_log = target_node.clone();
 
-        let session = CrossNodeSession::new(
-            session_id,
-            self.node_id.clone(),
-            target_node,
-            state,
-            events,
-        );
+        let session =
+            CrossNodeSession::new(session_id, self.node_id.clone(), target_node, state, events);
 
         session.validate()?;
 
@@ -264,10 +254,8 @@ impl SessionMigrationManager {
 
         let _event = NexusEvent::new(
             EventType::SessionMigrated {
-                from: SessionId::from_hex(&session.source_node)
-                    .unwrap_or_default(),
-                to: SessionId::from_hex(&session.target_node)
-                    .unwrap_or_default(),
+                from: SessionId::from_hex(&session.source_node).unwrap_or_default(),
+                to: SessionId::from_hex(&session.target_node).unwrap_or_default(),
                 export_hash: session.migration_id.clone(),
             },
             session_id,
@@ -303,10 +291,8 @@ mod tests {
 
     #[test]
     fn test_migration_prepare_and_validate() {
-        let manager = SessionMigrationManager::new(
-            "node-1".into(),
-            vec!["node-2".into(), "node-3".into()],
-        );
+        let manager =
+            SessionMigrationManager::new("node-1".into(), vec!["node-2".into(), "node-3".into()]);
 
         let sid = SessionId::from_bytes([1u8; 16]);
         let state = NexusState::new(sid, now_millis());
@@ -341,10 +327,7 @@ mod tests {
 
     #[test]
     fn test_migration_rejects_same_node() {
-        let manager = SessionMigrationManager::new(
-            "node-1".into(),
-            vec!["node-1".into()],
-        );
+        let manager = SessionMigrationManager::new("node-1".into(), vec!["node-1".into()]);
 
         let sid = SessionId::from_bytes([1u8; 16]);
         let state = NexusState::new(sid, now_millis());
@@ -355,10 +338,7 @@ mod tests {
 
     #[test]
     fn test_migration_rejects_unknown_target() {
-        let manager = SessionMigrationManager::new(
-            "node-1".into(),
-            vec!["node-2".into()],
-        );
+        let manager = SessionMigrationManager::new("node-1".into(), vec!["node-2".into()]);
 
         let sid = SessionId::from_bytes([1u8; 16]);
         let state = NexusState::new(sid, now_millis());
@@ -388,19 +368,13 @@ mod tests {
         let dag = BTreeMap::new();
         state = transition(&state, &event, &dag).unwrap();
 
-        let source_manager = SessionMigrationManager::new(
-            "node-1".into(),
-            vec!["node-2".into()],
-        );
+        let source_manager = SessionMigrationManager::new("node-1".into(), vec!["node-2".into()]);
 
         let session = source_manager
             .prepare_migration(sid, "node-2".into(), state, &[event])
             .unwrap();
 
-        let target_manager = SessionMigrationManager::new(
-            "node-2".into(),
-            vec!["node-1".into()],
-        );
+        let target_manager = SessionMigrationManager::new("node-2".into(), vec!["node-1".into()]);
 
         let received = target_manager.receive_migration(session).await.unwrap();
         assert_eq!(received.status, MigrationStatus::Validated);

@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
-use crate::types::*;
+use crate::checkpoint::*;
 use crate::event::*;
 use crate::state_machine::*;
-use crate::checkpoint::*;
+use crate::types::*;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Default)]
 pub struct RecoveryReport {
@@ -238,10 +238,7 @@ impl RecoveryManager {
         Ok(())
     }
 
-    pub fn load_latest_checkpoint(
-        &self,
-        _session_id: SessionId,
-    ) -> Option<Checkpoint> {
+    pub fn load_latest_checkpoint(&self, _session_id: SessionId) -> Option<Checkpoint> {
         None
     }
 }
@@ -303,9 +300,9 @@ pub fn reacquire_handle(handle: &HandleRecord) -> Result<(), RecoveryError> {
 
 #[cfg(test)]
 mod tests {
+    use super::{RecoveryContext, RecoveryError, RecoveryManager};
     use crate::event::{EventType, NexusEvent};
     use crate::types::*;
-    use super::{RecoveryManager, RecoveryError, RecoveryContext};
 
     #[test]
     fn test_recover_from_empty_events_fails() {

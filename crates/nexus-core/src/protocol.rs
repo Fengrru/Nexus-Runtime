@@ -1,14 +1,18 @@
 use rmp_serde::Serializer;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 
-pub fn serialize_deterministic<T: Serialize>(value: &T) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+pub fn serialize_deterministic<T: Serialize>(
+    value: &T,
+) -> Result<Vec<u8>, rmp_serde::encode::Error> {
     let mut buf = Vec::new();
     value.serialize(&mut Serializer::new(&mut buf).with_struct_map())?;
     Ok(buf)
 }
 
-pub fn deserialize_deterministic<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, rmp_serde::decode::Error> {
+pub fn deserialize_deterministic<T: DeserializeOwned>(
+    bytes: &[u8],
+) -> Result<T, rmp_serde::decode::Error> {
     rmp_serde::from_slice(bytes)
 }
 
@@ -19,7 +23,7 @@ pub fn compute_hash(bytes: &[u8]) -> String {
 }
 
 pub fn compute_sha256_hash(bytes: &[u8]) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
@@ -108,7 +112,10 @@ mod tests {
 
         let bytes1 = serialize_deterministic(&cv1).unwrap();
         let bytes2 = serialize_deterministic(&cv2).unwrap();
-        assert_eq!(bytes1, bytes2, "Deterministic serialization must produce identical bytes");
+        assert_eq!(
+            bytes1, bytes2,
+            "Deterministic serialization must produce identical bytes"
+        );
     }
 
     #[test]

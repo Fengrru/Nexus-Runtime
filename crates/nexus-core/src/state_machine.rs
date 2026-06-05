@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
-use crate::types::*;
 use crate::event::*;
+use crate::types::*;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum TransitionError {
@@ -102,13 +102,9 @@ pub fn transition(
             Ok(next)
         }
 
-        (SessionStatus::Executing, EventType::WorkerDispatched { .. }) => {
-            Ok(next)
-        }
+        (SessionStatus::Executing, EventType::WorkerDispatched { .. }) => Ok(next),
 
-        (SessionStatus::Executing, EventType::WorkerStarted { .. }) => {
-            Ok(next)
-        }
+        (SessionStatus::Executing, EventType::WorkerStarted { .. }) => Ok(next),
 
         (SessionStatus::Executing, EventType::WorkerCheckpoint { step_index, .. }) => {
             if *step_index <= current.checkpoint_seq {
@@ -213,7 +209,12 @@ pub fn transition(
             Ok(next)
         }
 
-        (SessionStatus::Checkpointing, EventType::SessionResumed { inherited_memories, .. }) => {
+        (
+            SessionStatus::Checkpointing,
+            EventType::SessionResumed {
+                inherited_memories, ..
+            },
+        ) => {
             let mut new_memories = current.memory_refs.clone();
             for m in inherited_memories {
                 if !new_memories.iter().any(|existing| existing.memory_id == *m) {
@@ -312,7 +313,10 @@ fn merge_memory_refs(current: &[MemoryRef], delta: &[MemoryDelta]) -> Vec<Memory
                 }
             }
             MemoryOperation::Update => {
-                if let Some(idx) = result.iter().position(|m| m.memory_id == d.memory_ref.memory_id) {
+                if let Some(idx) = result
+                    .iter()
+                    .position(|m| m.memory_id == d.memory_ref.memory_id)
+                {
                     result[idx] = d.memory_ref.clone();
                 }
             }
@@ -331,11 +335,7 @@ mod tests {
     use crate::event::{EventType, NexusEvent};
     use std::collections::BTreeMap;
 
-    fn make_event(
-        event_type: EventType,
-        session_id: SessionId,
-        cv: CausalVector,
-    ) -> NexusEvent {
+    fn make_event(event_type: EventType, session_id: SessionId, cv: CausalVector) -> NexusEvent {
         NexusEvent::new(event_type, session_id, cv, None)
     }
 
@@ -389,8 +389,12 @@ mod tests {
         let mut cv = CausalVector::new();
         cv.increment(sid);
         let e1 = make_event(
-            EventType::IntentReceived { raw_input: "refactor".into(), source: "cli".into() },
-            sid, cv.clone(),
+            EventType::IntentReceived {
+                raw_input: "refactor".into(),
+                source: "cli".into(),
+            },
+            sid,
+            cv.clone(),
         );
         state = transition(&state, &e1, &dag).unwrap();
         assert_eq!(state.status, SessionStatus::Intake);
@@ -398,8 +402,11 @@ mod tests {
         // Intake -> Planning
         cv.increment(sid);
         let e2 = make_event(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            sid, cv.clone(),
+            EventType::IntentParsed {
+                intent_graph: IntentGraph::default(),
+            },
+            sid,
+            cv.clone(),
         );
         state = transition(&state, &e2, &dag).unwrap();
         assert_eq!(state.status, SessionStatus::Planning);
@@ -407,8 +414,11 @@ mod tests {
         // Planning -> Planned
         cv.increment(sid);
         let e3 = make_event(
-            EventType::PlanCommitted { frontier: Frontier::empty() },
-            sid, cv.clone(),
+            EventType::PlanCommitted {
+                frontier: Frontier::empty(),
+            },
+            sid,
+            cv.clone(),
         );
         state = transition(&state, &e3, &dag).unwrap();
         assert_eq!(state.status, SessionStatus::Planned);
@@ -428,7 +438,8 @@ mod tests {
                 actions: vec![],
                 artifacts: vec![],
             },
-            sid, cv.clone(),
+            sid,
+            cv.clone(),
         );
         state = transition(&state, &e5, &dag).unwrap();
         assert_eq!(state.status, SessionStatus::Checkpointing);
@@ -441,7 +452,8 @@ mod tests {
                 from_checkpoint: 1,
                 inherited_memories: vec![],
             },
-            sid, cv.clone(),
+            sid,
+            cv.clone(),
         );
         state = transition(&state, &e6, &dag).unwrap();
         assert_eq!(state.status, SessionStatus::Executing);
@@ -455,8 +467,12 @@ mod tests {
 
         let event_cv = CausalVector::singleton(sid, 3); // Less than current (5)
         let event = make_event(
-            EventType::IntentReceived { raw_input: "test".into(), source: "test".into() },
-            sid, event_cv,
+            EventType::IntentReceived {
+                raw_input: "test".into(),
+                source: "test".into(),
+            },
+            sid,
+            event_cv,
         );
 
         let result = transition(&state, &event, &BTreeMap::new());
@@ -471,12 +487,19 @@ mod tests {
         let cv = CausalVector::singleton(sid2, 1);
 
         let event = make_event(
-            EventType::IntentReceived { raw_input: "test".into(), source: "test".into() },
-            sid2, cv,
+            EventType::IntentReceived {
+                raw_input: "test".into(),
+                source: "test".into(),
+            },
+            sid2,
+            cv,
         );
 
         let result = transition(&state, &event, &BTreeMap::new());
-        assert!(matches!(result, Err(TransitionError::SessionMismatch { .. })));
+        assert!(matches!(
+            result,
+            Err(TransitionError::SessionMismatch { .. })
+        ));
     }
 
     #[test]
@@ -487,8 +510,12 @@ mod tests {
         let cv = CausalVector::singleton(sid, 1);
 
         let event = make_event(
-            EventType::IntentReceived { raw_input: "test".into(), source: "test".into() },
-            sid, cv,
+            EventType::IntentReceived {
+                raw_input: "test".into(),
+                source: "test".into(),
+            },
+            sid,
+            cv,
         );
 
         let r1 = transition(&state, &event, &dag).unwrap();

@@ -1,11 +1,11 @@
+use crate::event::*;
+use crate::protocol::*;
+use crate::types::*;
+use serde::{Deserialize, Serialize};
 /// LLM Proxy — All LLM API calls are routed through the Kernel proxy.
 /// Workers NEVER have direct access to paid APIs.
 /// The proxy enforces budget, caches responses, and records audit trails.
 use std::collections::BTreeMap;
-use crate::types::*;
-use crate::event::*;
-use crate::protocol::*;
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmRequest {
@@ -67,13 +67,10 @@ impl LlmProxy {
                 prompt_hash = %prompt_hash,
                 "LLM cache hit — no API call needed"
             );
-            return Ok((entry.response.clone(), self.build_llm_event(
-                &request,
-                &entry.response,
-                &prompt_hash,
-                true,
-                causal_vector,
-            )?));
+            return Ok((
+                entry.response.clone(),
+                self.build_llm_event(&request, &entry.response, &prompt_hash, true, causal_vector)?,
+            ));
         }
 
         // Estimate cost (simple model pricing)
@@ -90,8 +87,7 @@ impl LlmProxy {
         let start = now_millis();
         let mut response = match self.call_real_api(&request).await {
             Ok(resp) => resp,
-            Err(ProxyError::ApiError(msg)) if
-                msg.contains("not set") => {
+            Err(ProxyError::ApiError(msg)) if msg.contains("not set") => {
                 tracing::warn!(
                     target = "nexus.llm_proxy",
                     reason = %msg,
@@ -109,14 +105,18 @@ impl LlmProxy {
         budget.add_cost(response.cost_cents, response.output_tokens, 1);
 
         // Cache the response (never re-call)
-        self.cache.insert(prompt_hash.clone(), LlmCacheEntry {
-            prompt_hash: prompt_hash.clone(),
-            response: response.clone(),
-            cached_at: now_millis(),
-            hit_count: 0,
-        });
+        self.cache.insert(
+            prompt_hash.clone(),
+            LlmCacheEntry {
+                prompt_hash: prompt_hash.clone(),
+                response: response.clone(),
+                cached_at: now_millis(),
+                hit_count: 0,
+            },
+        );
 
-        let event = self.build_llm_event(&request, &response, &prompt_hash, false, causal_vector)?;
+        let event =
+            self.build_llm_event(&request, &response, &prompt_hash, false, causal_vector)?;
 
         tracing::info!(
             target = "nexus.llm_proxy",
@@ -142,7 +142,10 @@ impl LlmProxy {
         Ok(LlmResponse {
             request_id: request.request_id.clone(),
             model: request.model.clone(),
-            content: format!("Simulated response for: {}", &request.prompt[..50.min(request.prompt.len())]),
+            content: format!(
+                "Simulated response for: {}",
+                &request.prompt[..50.min(request.prompt.len())]
+            ),
             input_tokens,
             output_tokens,
             cost_cents,
@@ -159,7 +162,10 @@ impl LlmProxy {
             self.call_anthropic_api(request).await
         } else if model_lower.starts_with("deepseek") {
             self.call_deepseek_api(request).await
-        } else if model_lower.starts_with("gpt") || model_lower.starts_with("o1") || model_lower.starts_with("o3") {
+        } else if model_lower.starts_with("gpt")
+            || model_lower.starts_with("o1")
+            || model_lower.starts_with("o3")
+        {
             self.call_openai_api(request).await
         } else {
             Err(ProxyError::ModelNotAvailable(request.model.clone()))
@@ -196,7 +202,10 @@ impl LlmProxy {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let text = resp.text().await.unwrap_or_default();
-            return Err(ProxyError::ApiError(format!("OpenAI HTTP {}: {}", status, text)));
+            return Err(ProxyError::ApiError(format!(
+                "OpenAI HTTP {}: {}",
+                status, text
+            )));
         }
 
         let data: serde_json::Value = resp
@@ -256,7 +265,10 @@ impl LlmProxy {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let text = resp.text().await.unwrap_or_default();
-            return Err(ProxyError::ApiError(format!("DeepSeek HTTP {}: {}", status, text)));
+            return Err(ProxyError::ApiError(format!(
+                "DeepSeek HTTP {}: {}",
+                status, text
+            )));
         }
 
         let data: serde_json::Value = resp
@@ -317,7 +329,10 @@ impl LlmProxy {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let text = resp.text().await.unwrap_or_default();
-            return Err(ProxyError::ApiError(format!("Anthropic HTTP {}: {}", status, text)));
+            return Err(ProxyError::ApiError(format!(
+                "Anthropic HTTP {}: {}",
+                status, text
+            )));
         }
 
         let data: serde_json::Value = resp
@@ -437,26 +452,29 @@ impl LlmProxy {
     /// Persist cache entries as LLM call records for recovery.
     /// On restart, the event log provides immutable cache — no re-calling APIs.
     pub fn persist_to_events(&self, session_id: SessionId) -> Vec<NexusEvent> {
-        self.cache.iter().map(|(prompt_hash, entry)| {
-            let mut cv = CausalVector::new();
-            cv.increment(session_id);
+        self.cache
+            .iter()
+            .map(|(prompt_hash, entry)| {
+                let mut cv = CausalVector::new();
+                cv.increment(session_id);
 
-            NexusEvent {
-                event_id: generate_event_id(),
-                event_type: EventType::MemoryConsolidated {
-                    memory_ids: vec![format!("llm_cache:{}", &prompt_hash[..16])],
-                },
-                session_id,
-                trace_id: generate_trace_id(),
-                parent_event_id: None,
-                causal_vector: cv,
-                payload: serde_json::to_vec(&entry.response).unwrap_or_default(),
-                payload_hash: prompt_hash.clone(),
-                event_timestamp: entry.cached_at,
-                nonce: generate_nonce(),
-                integrity_hash: String::new(),
-            }
-        }).collect()
+                NexusEvent {
+                    event_id: generate_event_id(),
+                    event_type: EventType::MemoryConsolidated {
+                        memory_ids: vec![format!("llm_cache:{}", &prompt_hash[..16])],
+                    },
+                    session_id,
+                    trace_id: generate_trace_id(),
+                    parent_event_id: None,
+                    causal_vector: cv,
+                    payload: serde_json::to_vec(&entry.response).unwrap_or_default(),
+                    payload_hash: prompt_hash.clone(),
+                    event_timestamp: entry.cached_at,
+                    nonce: generate_nonce(),
+                    integrity_hash: String::new(),
+                }
+            })
+            .collect()
     }
 
     /// Restore cache from persisted LLM call records in the event log.
@@ -466,7 +484,8 @@ impl LlmProxy {
             if let EventType::MemoryConsolidated { memory_ids } = &event.event_type {
                 for id in memory_ids {
                     if id.starts_with("llm_cache:") {
-                        if let Ok(response) = serde_json::from_slice::<LlmResponse>(&event.payload) {
+                        if let Ok(response) = serde_json::from_slice::<LlmResponse>(&event.payload)
+                        {
                             self.cache.insert(
                                 event.payload_hash.clone(),
                                 LlmCacheEntry {
@@ -541,12 +560,16 @@ mod tests {
 
             // First call — simulate API
             let cv = CausalVector::new();
-            let (resp1, _) = proxy.proxy_call(req.clone(), &mut budget, &cv).await.unwrap();
+            let (resp1, _) = proxy
+                .proxy_call(req.clone(), &mut budget, &cv)
+                .await
+                .unwrap();
 
             // Second call — should be cached
             let (resp2, _) = proxy.proxy_call(req, &mut budget, &cv).await.unwrap();
 
-            assert_eq!(resp1.response_hash, resp2.response_hash,
+            assert_eq!(
+                resp1.response_hash, resp2.response_hash,
                 "Cached response must be identical"
             );
             assert!(proxy.cache_stats().entries >= 1);
@@ -584,6 +607,9 @@ mod tests {
         let proxy = LlmProxy::new(b"key".to_vec());
         let gpt4_cost = proxy.estimate_cost("gpt-4o", 1000);
         let claude_cost = proxy.estimate_cost("claude-3.5-sonnet", 1000);
-        assert!(gpt4_cost > claude_cost, "gpt-4 should be more expensive than claude");
+        assert!(
+            gpt4_cost > claude_cost,
+            "gpt-4 should be more expensive than claude"
+        );
     }
 }

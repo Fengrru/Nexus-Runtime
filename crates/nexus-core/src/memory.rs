@@ -1,5 +1,5 @@
-use std::collections::BTreeSet;
 use crate::types::*;
+use std::collections::BTreeSet;
 
 impl MemoryGraph {
     pub fn new() -> Self {
@@ -48,11 +48,7 @@ impl MemoryGraph {
         results
     }
 
-    pub fn compute_activation(
-        &self,
-        memory_id: &str,
-        query_context: &QueryContext,
-    ) -> u64 {
+    pub fn compute_activation(&self, memory_id: &str, query_context: &QueryContext) -> u64 {
         let node = match self.nodes.get(memory_id) {
             Some(n) => n,
             None => return 0,

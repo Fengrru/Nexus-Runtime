@@ -1,8 +1,7 @@
 #![deny(clippy::disallowed_types)]
 
 use prometheus::{
-    self, CounterVec, GaugeVec, HistogramVec, Registry, Encoder, TextEncoder,
-    Opts, HistogramOpts,
+    self, CounterVec, Encoder, GaugeVec, HistogramOpts, HistogramVec, Opts, Registry, TextEncoder,
 };
 
 #[derive(Clone)]
@@ -31,7 +30,10 @@ impl NexusMetrics {
         let registry = Registry::new();
 
         let events_appended = CounterVec::new(
-            Opts::new("nexus_events_appended_total", "Total events appended to the event log"),
+            Opts::new(
+                "nexus_events_appended_total",
+                "Total events appended to the event log",
+            ),
             &["event_type", "session_status"],
         )?;
         registry.register(Box::new(events_appended.clone()))?;
@@ -55,7 +57,10 @@ impl NexusMetrics {
         registry.register(Box::new(workers_failed.clone()))?;
 
         let recovery_duration = HistogramVec::new(
-            HistogramOpts::new("nexus_recovery_duration_ms", "Recovery duration in milliseconds"),
+            HistogramOpts::new(
+                "nexus_recovery_duration_ms",
+                "Recovery duration in milliseconds",
+            ),
             &["events_replayed"],
         )?;
         registry.register(Box::new(recovery_duration.clone()))?;
@@ -67,7 +72,10 @@ impl NexusMetrics {
         registry.register(Box::new(checkpoint_size.clone()))?;
 
         let side_effects_committed = CounterVec::new(
-            Opts::new("nexus_side_effects_committed_total", "Total side effects committed"),
+            Opts::new(
+                "nexus_side_effects_committed_total",
+                "Total side effects committed",
+            ),
             &["effect_class"],
         )?;
         registry.register(Box::new(side_effects_committed.clone()))?;
@@ -85,7 +93,10 @@ impl NexusMetrics {
         registry.register(Box::new(llm_cost_cents.clone()))?;
 
         let memory_graph_nodes = GaugeVec::new(
-            Opts::new("nexus_memory_graph_nodes", "Number of nodes in the memory graph"),
+            Opts::new(
+                "nexus_memory_graph_nodes",
+                "Number of nodes in the memory graph",
+            ),
             &["session_id"],
         )?;
         registry.register(Box::new(memory_graph_nodes.clone()))?;
@@ -103,19 +114,28 @@ impl NexusMetrics {
         registry.register(Box::new(sessions_active.clone()))?;
 
         let causal_conflicts = CounterVec::new(
-            Opts::new("nexus_causal_conflicts_total", "Total causal conflicts detected"),
+            Opts::new(
+                "nexus_causal_conflicts_total",
+                "Total causal conflicts detected",
+            ),
             &["type"],
         )?;
         registry.register(Box::new(causal_conflicts.clone()))?;
 
         let coordination_rounds = CounterVec::new(
-            Opts::new("nexus_coordination_rounds_total", "Total multi-agent coordination rounds"),
+            Opts::new(
+                "nexus_coordination_rounds_total",
+                "Total multi-agent coordination rounds",
+            ),
             &["outcome"],
         )?;
         registry.register(Box::new(coordination_rounds.clone()))?;
 
         let message_bus_messages = CounterVec::new(
-            Opts::new("nexus_message_bus_messages_total", "Total messages on the causal bus"),
+            Opts::new(
+                "nexus_message_bus_messages_total",
+                "Total messages on the causal bus",
+            ),
             &["topic", "direction"],
         )?;
         registry.register(Box::new(message_bus_messages.clone()))?;
@@ -147,21 +167,15 @@ impl NexusMetrics {
     }
 
     pub fn record_transition(&self, from: &str, to: &str) {
-        self.transitions
-            .with_label_values(&[from, to])
-            .inc();
+        self.transitions.with_label_values(&[from, to]).inc();
     }
 
     pub fn record_worker_spawn(&self, worker_type: &str) {
-        self.workers_spawned
-            .with_label_values(&[worker_type])
-            .inc();
+        self.workers_spawned.with_label_values(&[worker_type]).inc();
     }
 
     pub fn record_worker_failure(&self, error_code: &str) {
-        self.workers_failed
-            .with_label_values(&[error_code])
-            .inc();
+        self.workers_failed.with_label_values(&[error_code]).inc();
     }
 
     pub fn record_recovery(&self, events_replayed: usize, duration_ms: u64) {
@@ -177,9 +191,7 @@ impl NexusMetrics {
     }
 
     pub fn record_llm_call(&self, model: &str, session_id: &str, cost_cents: u64) {
-        self.llm_calls
-            .with_label_values(&[model])
-            .inc();
+        self.llm_calls.with_label_values(&[model]).inc();
         self.llm_cost_cents
             .with_label_values(&[model, session_id])
             .inc_by(cost_cents as f64);
@@ -192,9 +204,7 @@ impl NexusMetrics {
     }
 
     pub fn set_entropy_score(&self, score: f64) {
-        self.entropy_score
-            .with_label_values(&[])
-            .set(score);
+        self.entropy_score.with_label_values(&[]).set(score);
     }
 
     pub fn set_sessions_active(&self, status: &str, count: u64) {
@@ -210,9 +220,7 @@ impl NexusMetrics {
     }
 
     pub fn record_coordination(&self, outcome: &str) {
-        self.coordination_rounds
-            .with_label_values(&[outcome])
-            .inc();
+        self.coordination_rounds.with_label_values(&[outcome]).inc();
     }
 
     pub fn record_message(&self, topic: &str, direction: &str) {
@@ -226,9 +234,7 @@ impl NexusMetrics {
         let metric_families = self.registry.gather();
         let mut buffer = Vec::new();
         encoder.encode(&metric_families, &mut buffer)?;
-        String::from_utf8(buffer).map_err(|e| {
-            prometheus::Error::Msg(format!("UTF-8 error: {}", e))
-        })
+        String::from_utf8(buffer).map_err(|e| prometheus::Error::Msg(format!("UTF-8 error: {}", e)))
     }
 }
 

@@ -37,16 +37,11 @@ impl SideEffectGuard {
     }
 
     pub fn record_intent(&mut self, intent: SideEffectIntent) -> Result<String, EffectError> {
-        let _idempotency_key = format!(
-            "{}:{}",
-            intent.session_id.to_hex(),
-            intent.request_hash
-        );
+        let _idempotency_key = format!("{}:{}", intent.session_id.to_hex(), intent.request_hash);
 
         // Check for existing intent (idempotency)
         if let Some(existing) = self.effects.iter().find(|e| {
-            e.intent.request_hash == intent.request_hash
-                && e.intent.session_id == intent.session_id
+            e.intent.request_hash == intent.request_hash && e.intent.session_id == intent.session_id
         }) {
             if existing.status == EffectStatus::Pending
                 || existing.status == EffectStatus::Committed
@@ -145,9 +140,7 @@ impl SideEffectGuard {
 
         match record.status {
             EffectStatus::Pending => match record.intent.effect_class {
-                SideEffectClass::Pure | SideEffectClass::Idempotent => {
-                    Ok(RecoveryAction::Replay)
-                }
+                SideEffectClass::Pure | SideEffectClass::Idempotent => Ok(RecoveryAction::Replay),
                 SideEffectClass::Reversible => {
                     if record.compensation_data.is_some() {
                         Ok(RecoveryAction::CompensateAndReplay)
@@ -402,6 +395,9 @@ mod tests {
         };
 
         let result = guard.record_intent(intent);
-        assert!(matches!(result, Err(EffectError::PreconditionFailed { .. })));
+        assert!(matches!(
+            result,
+            Err(EffectError::PreconditionFailed { .. })
+        ));
     }
 }

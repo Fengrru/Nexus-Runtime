@@ -1,7 +1,7 @@
 #![deny(clippy::disallowed_types)]
 
-use std::collections::BTreeMap;
 use nexus_core::*;
+use std::collections::BTreeMap;
 
 pub struct PhoenixHarness {
     pub temp_dir: tempfile::TempDir,
@@ -88,10 +88,7 @@ impl PhoenixInvariants {
         Ok(())
     }
 
-    pub fn i3_replay_integrity(
-        events: &[NexusEvent],
-        expected: &NexusState,
-    ) -> Result<(), String> {
+    pub fn i3_replay_integrity(events: &[NexusEvent], expected: &NexusState) -> Result<(), String> {
         let mut replayed = NexusState::new(expected.session_id, expected.created_at);
         let dag = BTreeMap::new();
 
@@ -115,7 +112,8 @@ impl PhoenixInvariants {
             if art.blake3.len() != 64 {
                 return Err(format!(
                     "I-4: artifact {} has invalid blake3 hash (len={})",
-                    art.id, art.blake3.len()
+                    art.id,
+                    art.blake3.len()
                 ));
             }
             if art.size_bytes == 0 {
@@ -201,16 +199,46 @@ impl PhoenixSuite {
     pub async fn run_all() -> Result<PhoenixReport, String> {
         let mut report = PhoenixReport::default();
 
-        report.tests.push(PhoenixTestResult { name: "kill9_at_intake".into(), passed: true });
-        report.tests.push(PhoenixTestResult { name: "kill9_at_planning".into(), passed: true });
-        report.tests.push(PhoenixTestResult { name: "kill9_at_executing".into(), passed: true });
-        report.tests.push(PhoenixTestResult { name: "kill9_at_checkpoint".into(), passed: true });
-        report.tests.push(PhoenixTestResult { name: "kill9_at_converging".into(), passed: true });
-        report.tests.push(PhoenixTestResult { name: "kill9_at_reflecting".into(), passed: true });
-        report.tests.push(PhoenixTestResult { name: "worker_crash".into(), passed: true });
-        report.tests.push(PhoenixTestResult { name: "llm_api_timeout".into(), passed: true });
-        report.tests.push(PhoenixTestResult { name: "side_effect_crash".into(), passed: true });
-        report.tests.push(PhoenixTestResult { name: "cross_session_resume".into(), passed: true });
+        report.tests.push(PhoenixTestResult {
+            name: "kill9_at_intake".into(),
+            passed: true,
+        });
+        report.tests.push(PhoenixTestResult {
+            name: "kill9_at_planning".into(),
+            passed: true,
+        });
+        report.tests.push(PhoenixTestResult {
+            name: "kill9_at_executing".into(),
+            passed: true,
+        });
+        report.tests.push(PhoenixTestResult {
+            name: "kill9_at_checkpoint".into(),
+            passed: true,
+        });
+        report.tests.push(PhoenixTestResult {
+            name: "kill9_at_converging".into(),
+            passed: true,
+        });
+        report.tests.push(PhoenixTestResult {
+            name: "kill9_at_reflecting".into(),
+            passed: true,
+        });
+        report.tests.push(PhoenixTestResult {
+            name: "worker_crash".into(),
+            passed: true,
+        });
+        report.tests.push(PhoenixTestResult {
+            name: "llm_api_timeout".into(),
+            passed: true,
+        });
+        report.tests.push(PhoenixTestResult {
+            name: "side_effect_crash".into(),
+            passed: true,
+        });
+        report.tests.push(PhoenixTestResult {
+            name: "cross_session_resume".into(),
+            passed: true,
+        });
 
         Ok(report)
     }
@@ -250,16 +278,25 @@ mod phoenix_invariants {
         let mut cv = CausalVector::new();
         cv.increment(session_id);
         let e1 = NexusEvent::new(
-            EventType::IntentReceived { raw_input: "refactor".into(), source: "phoenix".into() },
-            session_id, cv.clone(), None,
+            EventType::IntentReceived {
+                raw_input: "refactor".into(),
+                source: "phoenix".into(),
+            },
+            session_id,
+            cv.clone(),
+            None,
         );
         state = transition(&state, &e1, &dag).unwrap();
         assert_eq!(state.status, SessionStatus::Intake);
 
         cv.increment(session_id);
         let e2 = NexusEvent::new(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            session_id, cv.clone(), None,
+            EventType::IntentParsed {
+                intent_graph: IntentGraph::default(),
+            },
+            session_id,
+            cv.clone(),
+            None,
         );
         state = transition(&state, &e2, &dag).unwrap();
         assert_eq!(state.status, SessionStatus::Planning);
@@ -283,22 +320,35 @@ mod phoenix_invariants {
         // Drive through intake, planning, planned to executing
         cv.increment(session_id);
         let e1 = NexusEvent::new(
-            EventType::IntentReceived { raw_input: "task".into(), source: "phoenix".into() },
-            session_id, cv.clone(), None,
+            EventType::IntentReceived {
+                raw_input: "task".into(),
+                source: "phoenix".into(),
+            },
+            session_id,
+            cv.clone(),
+            None,
         );
         state = transition(&state, &e1, &dag).unwrap();
 
         cv.increment(session_id);
         let e2 = NexusEvent::new(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            session_id, cv.clone(), None,
+            EventType::IntentParsed {
+                intent_graph: IntentGraph::default(),
+            },
+            session_id,
+            cv.clone(),
+            None,
         );
         state = transition(&state, &e2, &dag).unwrap();
 
         cv.increment(session_id);
         let e3 = NexusEvent::new(
-            EventType::PlanCommitted { frontier: Frontier::empty() },
-            session_id, cv.clone(), None,
+            EventType::PlanCommitted {
+                frontier: Frontier::empty(),
+            },
+            session_id,
+            cv.clone(),
+            None,
         );
         state = transition(&state, &e3, &dag).unwrap();
 
@@ -324,27 +374,58 @@ mod phoenix_invariants {
 
         // Drive to executing
         cv.increment(session_id);
-        state = transition(&state, &NexusEvent::new(
-            EventType::IntentReceived { raw_input: "task".into(), source: "phoenix".into() },
-            session_id, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(
+                EventType::IntentReceived {
+                    raw_input: "task".into(),
+                    source: "phoenix".into(),
+                },
+                session_id,
+                cv.clone(),
+                None,
+            ),
+            &dag,
+        )
+        .unwrap();
 
         cv.increment(session_id);
-        state = transition(&state, &NexusEvent::new(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            session_id, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(
+                EventType::IntentParsed {
+                    intent_graph: IntentGraph::default(),
+                },
+                session_id,
+                cv.clone(),
+                None,
+            ),
+            &dag,
+        )
+        .unwrap();
 
         cv.increment(session_id);
-        state = transition(&state, &NexusEvent::new(
-            EventType::PlanCommitted { frontier: Frontier::empty() },
-            session_id, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(
+                EventType::PlanCommitted {
+                    frontier: Frontier::empty(),
+                },
+                session_id,
+                cv.clone(),
+                None,
+            ),
+            &dag,
+        )
+        .unwrap();
 
         cv.increment(session_id);
-        state = transition(&state, &NexusEvent::new(
-            EventType::DependenciesMet, session_id, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(EventType::DependenciesMet, session_id, cv.clone(), None),
+            &dag,
+        )
+        .unwrap();
 
         // Now trigger checkpoint
         cv.increment(session_id);
@@ -355,7 +436,9 @@ mod phoenix_invariants {
                 actions: vec![],
                 artifacts: vec![],
             },
-            session_id, cv.clone(), None,
+            session_id,
+            cv.clone(),
+            None,
         );
         state = transition(&state, &e5, &dag).unwrap();
         assert_eq!(state.status, SessionStatus::Checkpointing);
@@ -366,26 +449,49 @@ mod phoenix_invariants {
         let mut cva = CausalVector::new();
         cva.increment(session_id);
         let a = NexusEvent::new(
-            EventType::IntentReceived { raw_input: "task".into(), source: "phoenix".into() },
-            session_id, cva, None,
+            EventType::IntentReceived {
+                raw_input: "task".into(),
+                source: "phoenix".into(),
+            },
+            session_id,
+            cva,
+            None,
         );
         let mut cvb = CausalVector::new();
-        cvb.increment(session_id); cvb.increment(session_id);
+        cvb.increment(session_id);
+        cvb.increment(session_id);
         let b = NexusEvent::new(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            session_id, cvb, None,
+            EventType::IntentParsed {
+                intent_graph: IntentGraph::default(),
+            },
+            session_id,
+            cvb,
+            None,
         );
         let mut cvc = CausalVector::new();
-        cvc.increment(session_id); cvc.increment(session_id); cvc.increment(session_id);
+        cvc.increment(session_id);
+        cvc.increment(session_id);
+        cvc.increment(session_id);
         let c = NexusEvent::new(
-            EventType::PlanCommitted { frontier: Frontier::empty() },
-            session_id, cvc, None,
+            EventType::PlanCommitted {
+                frontier: Frontier::empty(),
+            },
+            session_id,
+            cvc,
+            None,
         );
         let mut cvd = CausalVector::new();
-        cvd.increment(session_id); cvd.increment(session_id); cvd.increment(session_id); cvd.increment(session_id);
+        cvd.increment(session_id);
+        cvd.increment(session_id);
+        cvd.increment(session_id);
+        cvd.increment(session_id);
         let d = NexusEvent::new(EventType::DependenciesMet, session_id, cvd, None);
         let mut cve = CausalVector::new();
-        cve.increment(session_id); cve.increment(session_id); cve.increment(session_id); cve.increment(session_id); cve.increment(session_id);
+        cve.increment(session_id);
+        cve.increment(session_id);
+        cve.increment(session_id);
+        cve.increment(session_id);
+        cve.increment(session_id);
         let e = NexusEvent::new(
             EventType::WorkerCheckpoint {
                 task_id: TaskId::from_bytes([2u8; 16]),
@@ -393,7 +499,9 @@ mod phoenix_invariants {
                 actions: vec![],
                 artifacts: vec![],
             },
-            session_id, cve, None,
+            session_id,
+            cve,
+            None,
         );
         let events = vec![a, b, c, d, e];
 
@@ -434,15 +542,24 @@ mod phoenix_invariants {
         // Drive to planned, then converging via DependenciesMet with fan_in
         cv.increment(session_id);
         let e1 = NexusEvent::new(
-            EventType::IntentReceived { raw_input: "merge".into(), source: "phoenix".into() },
-            session_id, cv.clone(), None,
+            EventType::IntentReceived {
+                raw_input: "merge".into(),
+                source: "phoenix".into(),
+            },
+            session_id,
+            cv.clone(),
+            None,
         );
         state = transition(&state, &e1, &dag).unwrap();
 
         cv.increment(session_id);
         let e2 = NexusEvent::new(
-            EventType::IntentParsed { intent_graph: intent_graph.clone() },
-            session_id, cv.clone(), None,
+            EventType::IntentParsed {
+                intent_graph: intent_graph.clone(),
+            },
+            session_id,
+            cv.clone(),
+            None,
         );
         state = transition(&state, &e2, &dag).unwrap();
 
@@ -455,13 +572,18 @@ mod phoenix_invariants {
                     f
                 },
             },
-            session_id, cv.clone(), None,
+            session_id,
+            cv.clone(),
+            None,
         );
         state = transition(&state, &e3, &dag).unwrap();
 
         // Build DAG for transition
         let mut fan_dag = BTreeMap::new();
-        fan_dag.insert(fan_in_id, intent_graph.nodes.get(&fan_in_id).unwrap().clone());
+        fan_dag.insert(
+            fan_in_id,
+            intent_graph.nodes.get(&fan_in_id).unwrap().clone(),
+        );
 
         cv.increment(session_id);
         let e4 = NexusEvent::new(EventType::DependenciesMet, session_id, cv.clone(), None);
@@ -507,20 +629,35 @@ mod phoenix_invariants {
 
         cv.increment(session_id);
         let e1 = NexusEvent::new(
-            EventType::IntentReceived { raw_input: "reflect".into(), source: "phoenix".into() },
-            session_id, cv.clone(), None,
+            EventType::IntentReceived {
+                raw_input: "reflect".into(),
+                source: "phoenix".into(),
+            },
+            session_id,
+            cv.clone(),
+            None,
         );
 
         cv.increment(session_id);
         let e2 = NexusEvent::new(
             EventType::IntentParsed { intent_graph },
-            session_id, cv.clone(), None,
+            session_id,
+            cv.clone(),
+            None,
         );
 
         cv.increment(session_id);
         let e3 = NexusEvent::new(
-            EventType::PlanCommitted { frontier: { let mut f = Frontier::empty(); f.nodes.push(fan_in_id); f } },
-            session_id, cv.clone(), None,
+            EventType::PlanCommitted {
+                frontier: {
+                    let mut f = Frontier::empty();
+                    f.nodes.push(fan_in_id);
+                    f
+                },
+            },
+            session_id,
+            cv.clone(),
+            None,
         );
 
         cv.increment(session_id);
@@ -532,19 +669,31 @@ mod phoenix_invariants {
                 merged_result: WorkerResult {
                     status: "completed".into(),
                     artifacts: vec![],
-                    metrics: WorkerMetrics { duration_ms: 100, tokens_consumed: 50, cost_cents: 1 },
+                    metrics: WorkerMetrics {
+                        duration_ms: 100,
+                        tokens_consumed: 50,
+                        cost_cents: 1,
+                    },
                 },
             },
-            session_id, cv.clone(), None,
+            session_id,
+            cv.clone(),
+            None,
         );
 
         cv.increment(session_id);
         let e6 = NexusEvent::new(
             EventType::ReflectionComplete {
-                evaluation: Evaluation { score: 0.9, summary: "good".into(), recommendations: vec![] },
+                evaluation: Evaluation {
+                    score: 0.9,
+                    summary: "good".into(),
+                    recommendations: vec![],
+                },
                 memory_delta: vec![],
             },
-            session_id, cv.clone(), None,
+            session_id,
+            cv.clone(),
+            None,
         );
 
         let events = vec![e1, e2, e3, e4, e5, e6];
@@ -630,7 +779,11 @@ mod phoenix_invariants {
         let recovered = rm.recover_from_events(&events, session_id).unwrap();
 
         let check = PhoenixInvariants::check_all(&recovered.report);
-        assert!(check.is_ok(), "Phoenix invariants failed: {}", check.unwrap_err());
+        assert!(
+            check.is_ok(),
+            "Phoenix invariants failed: {}",
+            check.unwrap_err()
+        );
     }
 
     #[test]
@@ -660,27 +813,58 @@ mod phoenix_edge_cases {
 
         // Drive to executing
         cv.increment(session_id);
-        state = transition(&state, &NexusEvent::new(
-            EventType::IntentReceived { raw_input: "crash test".into(), source: "phoenix".into() },
-            session_id, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(
+                EventType::IntentReceived {
+                    raw_input: "crash test".into(),
+                    source: "phoenix".into(),
+                },
+                session_id,
+                cv.clone(),
+                None,
+            ),
+            &dag,
+        )
+        .unwrap();
 
         cv.increment(session_id);
-        state = transition(&state, &NexusEvent::new(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            session_id, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(
+                EventType::IntentParsed {
+                    intent_graph: IntentGraph::default(),
+                },
+                session_id,
+                cv.clone(),
+                None,
+            ),
+            &dag,
+        )
+        .unwrap();
 
         cv.increment(session_id);
-        state = transition(&state, &NexusEvent::new(
-            EventType::PlanCommitted { frontier: Frontier::empty() },
-            session_id, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(
+                EventType::PlanCommitted {
+                    frontier: Frontier::empty(),
+                },
+                session_id,
+                cv.clone(),
+                None,
+            ),
+            &dag,
+        )
+        .unwrap();
 
         cv.increment(session_id);
-        state = transition(&state, &NexusEvent::new(
-            EventType::DependenciesMet, session_id, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(EventType::DependenciesMet, session_id, cv.clone(), None),
+            &dag,
+        )
+        .unwrap();
 
         // Worker fails with retryable error
         cv.increment(session_id);
@@ -692,7 +876,9 @@ mod phoenix_edge_cases {
                 error_code: ErrorCode::Retryable,
                 retry_count: 1,
             },
-            session_id, cv.clone(), None,
+            session_id,
+            cv.clone(),
+            None,
         );
         state = transition(&state, &e_fail, &dag).unwrap();
 
@@ -704,26 +890,54 @@ mod phoenix_edge_cases {
         let mut cva = CausalVector::new();
         cva.increment(session_id);
         events_builder.push(NexusEvent::new(
-            EventType::IntentReceived { raw_input: "crash test".into(), source: "phoenix".into() },
-            session_id, cva, None,
+            EventType::IntentReceived {
+                raw_input: "crash test".into(),
+                source: "phoenix".into(),
+            },
+            session_id,
+            cva,
+            None,
         ));
         let mut cvb = CausalVector::new();
-        cvb.increment(session_id); cvb.increment(session_id);
+        cvb.increment(session_id);
+        cvb.increment(session_id);
         events_builder.push(NexusEvent::new(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            session_id, cvb, None,
+            EventType::IntentParsed {
+                intent_graph: IntentGraph::default(),
+            },
+            session_id,
+            cvb,
+            None,
         ));
         let mut cvc = CausalVector::new();
-        cvc.increment(session_id); cvc.increment(session_id); cvc.increment(session_id);
+        cvc.increment(session_id);
+        cvc.increment(session_id);
+        cvc.increment(session_id);
         events_builder.push(NexusEvent::new(
-            EventType::PlanCommitted { frontier: Frontier::empty() },
-            session_id, cvc, None,
+            EventType::PlanCommitted {
+                frontier: Frontier::empty(),
+            },
+            session_id,
+            cvc,
+            None,
         ));
         let mut cvd = CausalVector::new();
-        cvd.increment(session_id); cvd.increment(session_id); cvd.increment(session_id); cvd.increment(session_id);
-        events_builder.push(NexusEvent::new(EventType::DependenciesMet, session_id, cvd, None));
+        cvd.increment(session_id);
+        cvd.increment(session_id);
+        cvd.increment(session_id);
+        cvd.increment(session_id);
+        events_builder.push(NexusEvent::new(
+            EventType::DependenciesMet,
+            session_id,
+            cvd,
+            None,
+        ));
         let mut cve = CausalVector::new();
-        cve.increment(session_id); cve.increment(session_id); cve.increment(session_id); cve.increment(session_id); cve.increment(session_id);
+        cve.increment(session_id);
+        cve.increment(session_id);
+        cve.increment(session_id);
+        cve.increment(session_id);
+        cve.increment(session_id);
         events_builder.push(NexusEvent::new(
             EventType::WorkerFailed {
                 worker_id: "w1".into(),
@@ -732,7 +946,9 @@ mod phoenix_edge_cases {
                 error_code: ErrorCode::Retryable,
                 retry_count: 1,
             },
-            session_id, cve, None,
+            session_id,
+            cve,
+            None,
         ));
 
         let rm = RecoveryManager::new("/tmp/phoenix_vault".into());
@@ -801,22 +1017,35 @@ mod phoenix_edge_cases {
 
         cv.increment(sid_a);
         let e1 = NexusEvent::new(
-            EventType::IntentReceived { raw_input: "session A work".into(), source: "phoenix".into() },
-            sid_a, cv.clone(), None,
+            EventType::IntentReceived {
+                raw_input: "session A work".into(),
+                source: "phoenix".into(),
+            },
+            sid_a,
+            cv.clone(),
+            None,
         );
         state_a = transition(&state_a, &e1, &dag).unwrap();
 
         cv.increment(sid_a);
         let e2 = NexusEvent::new(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            sid_a, cv.clone(), None,
+            EventType::IntentParsed {
+                intent_graph: IntentGraph::default(),
+            },
+            sid_a,
+            cv.clone(),
+            None,
         );
         state_a = transition(&state_a, &e2, &dag).unwrap();
 
         cv.increment(sid_a);
         let e3 = NexusEvent::new(
-            EventType::PlanCommitted { frontier: Frontier::empty() },
-            sid_a, cv.clone(), None,
+            EventType::PlanCommitted {
+                frontier: Frontier::empty(),
+            },
+            sid_a,
+            cv.clone(),
+            None,
         );
         state_a = transition(&state_a, &e3, &dag).unwrap();
 
@@ -827,7 +1056,11 @@ mod phoenix_edge_cases {
         cv.increment(sid_a);
         let _e5 = NexusEvent::new(
             EventType::ReflectionComplete {
-                evaluation: Evaluation { score: 1.0, summary: "excellent".into(), recommendations: vec![] },
+                evaluation: Evaluation {
+                    score: 1.0,
+                    summary: "excellent".into(),
+                    recommendations: vec![],
+                },
                 memory_delta: vec![MemoryDelta {
                     operation: MemoryOperation::Add,
                     memory_ref: MemoryRef {
@@ -838,7 +1071,9 @@ mod phoenix_edge_cases {
                     },
                 }],
             },
-            sid_a, cv.clone(), None,
+            sid_a,
+            cv.clone(),
+            None,
         );
         // This requires being in Reflecting state first, so we need to skip to it
         // For test purposes, just verify that memory was added via the reflection event
@@ -850,22 +1085,35 @@ mod phoenix_edge_cases {
 
         cv_b.increment(sid_b);
         let e_b = NexusEvent::new(
-            EventType::IntentReceived { raw_input: "session B inherits".into(), source: "phoenix".into() },
-            sid_b, cv_b.clone(), None,
+            EventType::IntentReceived {
+                raw_input: "session B inherits".into(),
+                source: "phoenix".into(),
+            },
+            sid_b,
+            cv_b.clone(),
+            None,
         );
         state_b = transition(&state_b, &e_b, &dag_b).unwrap();
 
         cv_b.increment(sid_b);
         let e_b2 = NexusEvent::new(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            sid_b, cv_b.clone(), None,
+            EventType::IntentParsed {
+                intent_graph: IntentGraph::default(),
+            },
+            sid_b,
+            cv_b.clone(),
+            None,
         );
         state_b = transition(&state_b, &e_b2, &dag_b).unwrap();
 
         cv_b.increment(sid_b);
         let e_b3 = NexusEvent::new(
-            EventType::PlanCommitted { frontier: Frontier::empty() },
-            sid_b, cv_b.clone(), None,
+            EventType::PlanCommitted {
+                frontier: Frontier::empty(),
+            },
+            sid_b,
+            cv_b.clone(),
+            None,
         );
         state_b = transition(&state_b, &e_b3, &dag_b).unwrap();
 
@@ -877,8 +1125,12 @@ mod phoenix_edge_cases {
         // Now suspend session B, then resume with inherited memories from A
         cv_b.increment(sid_b);
         let e_suspend = NexusEvent::new(
-            EventType::SessionSuspended { reason: "context switch".into() },
-            sid_b, cv_b.clone(), None,
+            EventType::SessionSuspended {
+                reason: "context switch".into(),
+            },
+            sid_b,
+            cv_b.clone(),
+            None,
         );
         state_b = transition(&state_b, &e_suspend, &dag_b).unwrap();
         assert_eq!(state_b.status, SessionStatus::Checkpointing);
@@ -889,12 +1141,19 @@ mod phoenix_edge_cases {
                 from_checkpoint: state_b.checkpoint_seq,
                 inherited_memories: vec!["knowledge_x".to_string()],
             },
-            sid_b, cv_b.clone(), None,
+            sid_b,
+            cv_b.clone(),
+            None,
         );
         state_b = transition(&state_b, &e_resume, &dag_b).unwrap();
         assert_eq!(state_b.status, SessionStatus::Executing);
-        assert!(state_b.memory_refs.iter().any(|m| m.memory_id == "knowledge_x"),
-            "Should have inherited memory from session A");
+        assert!(
+            state_b
+                .memory_refs
+                .iter()
+                .any(|m| m.memory_id == "knowledge_x"),
+            "Should have inherited memory from session A"
+        );
     }
 
     #[tokio::test]
@@ -908,50 +1167,94 @@ mod phoenix_edge_cases {
 
         // Drive to Planning
         cv.increment(session_id);
-        state = transition(&state, &NexusEvent::new(
-            EventType::IntentReceived { raw_input: "timeout test".into(), source: "phoenix".into() },
-            session_id, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(
+                EventType::IntentReceived {
+                    raw_input: "timeout test".into(),
+                    source: "phoenix".into(),
+                },
+                session_id,
+                cv.clone(),
+                None,
+            ),
+            &dag,
+        )
+        .unwrap();
 
         cv.increment(session_id);
-        state = transition(&state, &NexusEvent::new(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            session_id, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(
+                EventType::IntentParsed {
+                    intent_graph: IntentGraph::default(),
+                },
+                session_id,
+                cv.clone(),
+                None,
+            ),
+            &dag,
+        )
+        .unwrap();
         assert_eq!(state.status, SessionStatus::Planning);
 
         // LLM timeout — plan is rejected (simulating API timeout)
         cv.increment(session_id);
-        state = transition(&state, &NexusEvent::new(
-            EventType::PlanRejected { reason: "LLM API timeout after 30s".into() },
-            session_id, cv.clone(), None,
-        ), &dag).unwrap();
+        state = transition(
+            &state,
+            &NexusEvent::new(
+                EventType::PlanRejected {
+                    reason: "LLM API timeout after 30s".into(),
+                },
+                session_id,
+                cv.clone(),
+                None,
+            ),
+            &dag,
+        )
+        .unwrap();
 
-        assert_eq!(state.status, SessionStatus::Failed,
-            "LLM timeout should fail the session (PlanRejected)");
+        assert_eq!(
+            state.status,
+            SessionStatus::Failed,
+            "LLM timeout should fail the session (PlanRejected)"
+        );
 
         // Recover — verify the failure state is preserved
         let mut events = Vec::new();
         let mut c1 = CausalVector::new();
         c1.increment(session_id);
         events.push(NexusEvent::new(
-            EventType::IntentReceived { raw_input: "timeout test".into(), source: "phoenix".into() },
-            session_id, c1, None,
+            EventType::IntentReceived {
+                raw_input: "timeout test".into(),
+                source: "phoenix".into(),
+            },
+            session_id,
+            c1,
+            None,
         ));
         let mut c2 = CausalVector::new();
         c2.increment(session_id);
         c2.increment(session_id);
         events.push(NexusEvent::new(
-            EventType::IntentParsed { intent_graph: IntentGraph::default() },
-            session_id, c2, None,
+            EventType::IntentParsed {
+                intent_graph: IntentGraph::default(),
+            },
+            session_id,
+            c2,
+            None,
         ));
         let mut c3 = CausalVector::new();
         c3.increment(session_id);
         c3.increment(session_id);
         c3.increment(session_id);
         events.push(NexusEvent::new(
-            EventType::PlanRejected { reason: "LLM API timeout after 30s".into() },
-            session_id, c3, None,
+            EventType::PlanRejected {
+                reason: "LLM API timeout after 30s".into(),
+            },
+            session_id,
+            c3,
+            None,
         ));
 
         let rm = RecoveryManager::new("/tmp/phoenix_vault".into());
@@ -1342,7 +1645,9 @@ mod integration {
                 raw_input: "refactor auth".into(),
                 source: "openclaw:discord".into(),
             },
-            sid, cv.clone(), None,
+            sid,
+            cv.clone(),
+            None,
         );
 
         cv.increment(sid);
@@ -1350,7 +1655,9 @@ mod integration {
             EventType::IntentParsed {
                 intent_graph: IntentGraph::default(),
             },
-            sid, cv.clone(), None,
+            sid,
+            cv.clone(),
+            None,
         );
 
         cv.increment(sid);
@@ -1358,14 +1665,13 @@ mod integration {
             EventType::PlanCommitted {
                 frontier: Frontier::empty(),
             },
-            sid, cv.clone(), None,
+            sid,
+            cv.clone(),
+            None,
         );
 
         cv.increment(sid);
-        let e4 = NexusEvent::new(
-            EventType::DependenciesMet,
-            sid, cv.clone(), None,
-        );
+        let e4 = NexusEvent::new(EventType::DependenciesMet, sid, cv.clone(), None);
 
         cv.increment(sid);
         let e5 = NexusEvent::new(
@@ -1375,7 +1681,9 @@ mod integration {
                 actions: vec![],
                 artifacts: vec![],
             },
-            sid, cv.clone(), None,
+            sid,
+            cv.clone(),
+            None,
         );
 
         let events = vec![e1, e2, e3, e4, e5];

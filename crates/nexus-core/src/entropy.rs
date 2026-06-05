@@ -175,6 +175,10 @@ mod tests {
             validation_divergence: 0.0,
         };
         let score = controller.calculate(&signals);
-        assert!((score - 0.4).abs() < 0.001, "Retry rate weight should be 0.4, got {}", score);
+        assert!(
+            (score - 0.4).abs() < 0.001,
+            "Retry rate weight should be 0.4, got {}",
+            score
+        );
     }
 }

@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SessionId(pub [u8; 16]);
@@ -123,11 +123,8 @@ impl CausalVector {
     }
 
     pub fn to_canonical(&self) -> String {
-        let map: std::collections::BTreeMap<String, u64> = self
-            .0
-            .iter()
-            .map(|(k, v)| (k.to_hex(), *v))
-            .collect();
+        let map: std::collections::BTreeMap<String, u64> =
+            self.0.iter().map(|(k, v)| (k.to_hex(), *v)).collect();
         serde_json::to_string(&map).unwrap_or_default()
     }
 
@@ -136,8 +133,8 @@ impl CausalVector {
             serde_json::from_str(s).map_err(|e| format!("causal_vector parse: {}", e))?;
         let mut result = BTreeMap::new();
         for (hex_key, count) in map {
-            let sid = SessionId::from_hex(&hex_key)
-                .map_err(|e| format!("session_id parse: {}", e))?;
+            let sid =
+                SessionId::from_hex(&hex_key).map_err(|e| format!("session_id parse: {}", e))?;
             result.insert(sid, count);
         }
         Ok(CausalVector(result))
@@ -362,8 +359,12 @@ pub struct MemoryNode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MemoryContent {
-    Text { text: String },
-    Structured { data: BTreeMap<String, String> },
+    Text {
+        text: String,
+    },
+    Structured {
+        data: BTreeMap<String, String>,
+    },
     Proposition {
         subject: String,
         predicate: String,
@@ -382,12 +383,17 @@ impl MemoryContent {
         match self {
             MemoryContent::Text { text } => text.contains(goal),
             MemoryContent::Structured { data } => data.values().any(|v| v.contains(goal)),
-            MemoryContent::Proposition { subject, predicate, object, .. } => {
-                subject.contains(goal) || predicate.contains(goal) || object.contains(goal)
-            }
-            MemoryContent::Skill { skill_id, parameters, .. } => {
-                skill_id.contains(goal) || parameters.values().any(|v| v.contains(goal))
-            }
+            MemoryContent::Proposition {
+                subject,
+                predicate,
+                object,
+                ..
+            } => subject.contains(goal) || predicate.contains(goal) || object.contains(goal),
+            MemoryContent::Skill {
+                skill_id,
+                parameters,
+                ..
+            } => skill_id.contains(goal) || parameters.values().any(|v| v.contains(goal)),
         }
     }
 }
@@ -673,7 +679,8 @@ mod tests {
 
     #[test]
     fn test_session_id_to_hex_round_trip() {
-        let sid = SessionId::from_bytes([0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let sid =
+            SessionId::from_bytes([0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
         let hex_str = sid.to_hex();
         let parsed = SessionId::from_hex(&hex_str).unwrap();
         assert_eq!(sid, parsed);

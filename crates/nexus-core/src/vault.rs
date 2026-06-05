@@ -1,10 +1,10 @@
+use crate::protocol::*;
+use crate::types::*;
+use serde::{Deserialize, Serialize};
 /// Content Vault — blake3 content-addressed storage with two-phase commit.
 /// All artifacts are stored immutably, addressed by their blake3 hash.
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use serde::{Serialize, Deserialize};
-use crate::types::*;
-use crate::protocol::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultEntry {
@@ -64,20 +64,22 @@ impl ContentVault {
 
     /// Phase 2: Commit staged content to disk
     pub fn commit(&mut self, uri: &str) -> Result<(), VaultError> {
-        let content = self.pending.remove(uri)
+        let content = self
+            .pending
+            .remove(uri)
             .ok_or_else(|| VaultError::NotStaged(uri.to_string()))?;
 
         let file_path = self.resolve_path(uri);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| VaultError::IoError(e.to_string()))?;
+            std::fs::create_dir_all(parent).map_err(|e| VaultError::IoError(e.to_string()))?;
         }
 
-        let entry = self.index.get_mut(uri)
+        let entry = self
+            .index
+            .get_mut(uri)
             .ok_or_else(|| VaultError::NotFound(uri.to_string()))?;
 
-        std::fs::write(&file_path, &content)
-            .map_err(|e| VaultError::IoError(e.to_string()))?;
+        std::fs::write(&file_path, &content).map_err(|e| VaultError::IoError(e.to_string()))?;
 
         // Verify integrity after write
         let stored_hash = compute_hash(&content);
@@ -118,7 +120,9 @@ impl ContentVault {
             return Ok(content.clone());
         }
 
-        let entry = self.index.get(uri)
+        let entry = self
+            .index
+            .get(uri)
             .ok_or_else(|| VaultError::NotFound(uri.to_string()))?;
 
         if !entry.committed {
@@ -126,8 +130,7 @@ impl ContentVault {
         }
 
         let path = self.resolve_path(uri);
-        let content = std::fs::read(&path)
-            .map_err(|e| VaultError::IoError(e.to_string()))?;
+        let content = std::fs::read(&path).map_err(|e| VaultError::IoError(e.to_string()))?;
 
         let actual_hash = compute_hash(&content);
         if actual_hash != entry.blake3 {
@@ -149,8 +152,7 @@ impl ContentVault {
             if !path.exists() {
                 return Err(VaultError::NotFound(uri.clone()));
             }
-            let content = std::fs::read(&path)
-                .map_err(|e| VaultError::IoError(e.to_string()))?;
+            let content = std::fs::read(&path).map_err(|e| VaultError::IoError(e.to_string()))?;
             let actual = compute_hash(&content);
             if actual != entry.blake3 {
                 return Err(VaultError::HashMismatch {

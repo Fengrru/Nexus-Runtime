@@ -1,5 +1,5 @@
 use nexus_core::*;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct HermesCliAdapter {
@@ -100,23 +100,22 @@ impl HermesCliAdapter {
     }
 
     pub fn save_to_file(&self) -> Result<(), String> {
-        let path = self.checkpoint_file.as_ref()
+        let path = self
+            .checkpoint_file
+            .as_ref()
             .ok_or("no checkpoint file configured")?;
         let json = serde_json::to_string_pretty(&self.checkpoint_buffer)
             .map_err(|e| format!("serialize: {}", e))?;
-        std::fs::write(path, json)
-            .map_err(|e| format!("write: {}", e))
+        std::fs::write(path, json).map_err(|e| format!("write: {}", e))
     }
 
     pub fn load_from_file(&mut self, path: &str) -> Result<(), String> {
-        let json = std::fs::read_to_string(path)
-            .map_err(|e| format!("read: {}", e))?;
-        self.checkpoint_buffer = serde_json::from_str(&json)
-            .map_err(|e| format!("deserialize: {}", e))?;
+        let json = std::fs::read_to_string(path).map_err(|e| format!("read: {}", e))?;
+        self.checkpoint_buffer =
+            serde_json::from_str(&json).map_err(|e| format!("deserialize: {}", e))?;
         if let Some(snapshot) = self.checkpoint_buffer.first() {
             self.session_id = Some(
-                SessionId::from_hex(&snapshot.session_id)
-                    .unwrap_or_else(|_| SessionId::new())
+                SessionId::from_hex(&snapshot.session_id).unwrap_or_else(|_| SessionId::new()),
             );
         }
         Ok(())
@@ -187,8 +186,7 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
 
-        let mut adapter = HermesCliAdapter::new()
-            .with_checkpoint_file(&path);
+        let mut adapter = HermesCliAdapter::new().with_checkpoint_file(&path);
         adapter.start_session("persist test");
         adapter.record_checkpoint(1, vec!["step 1".into()], vec![]);
         adapter.save_to_file().unwrap();

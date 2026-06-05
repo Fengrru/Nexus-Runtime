@@ -1,10 +1,10 @@
 #![deny(clippy::disallowed_types)]
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
 use nexus_core::*;
 use nexus_event_store::EventStore;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,11 +125,7 @@ impl<S: EventStore> MultiAgentCoordinator<S> {
         Ok(msg)
     }
 
-    pub async fn vote(
-        &self,
-        voter_id: SessionId,
-        vote: CoordinationVote,
-    ) -> Result<bool, String> {
+    pub async fn vote(&self, voter_id: SessionId, vote: CoordinationVote) -> Result<bool, String> {
         let mut sessions = self.active_sessions.write().await;
         let state = sessions
             .values_mut()
@@ -152,9 +148,7 @@ impl<S: EventStore> MultiAgentCoordinator<S> {
         })
     }
 
-    pub async fn commit_coordination(
-        &self,
-    ) -> Result<CoordinationResult, String> {
+    pub async fn commit_coordination(&self) -> Result<CoordinationResult, String> {
         let mut sessions = self.active_sessions.write().await;
         let state = sessions
             .values_mut()

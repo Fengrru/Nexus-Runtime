@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
 use clap::{Parser, Subcommand};
-use nexus_core::*;
 use nexus_core::llm_proxy::{LlmProxy, LlmRequest, ProxyError};
-use nexus_event_store::{SqliteEventStore, EventStore};
+use nexus_core::*;
+use nexus_event_store::{EventStore, SqliteEventStore};
+use std::collections::BTreeMap;
 
 #[derive(Parser)]
 #[command(name = "nexus", version = "1.0.0", about = "Nexus Runtime CLI")]
@@ -134,7 +134,11 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { intent, model, budget } => {
+        Commands::Run {
+            intent,
+            model,
+            budget,
+        } => {
             run_session(&intent, &model, budget).await;
         }
         Commands::Resume { session_id, from } => {
@@ -212,7 +216,10 @@ async fn run_session(intent: &str, model: &str, budget_usd: f64) {
 
     let store = match get_store().await {
         Ok(s) => s,
-        Err(e) => { println!("[ERR] {}", e); return; }
+        Err(e) => {
+            println!("[ERR] {}", e);
+            return;
+        }
     };
 
     let mut state = NexusState::new(session_id, now_millis());
@@ -233,7 +240,10 @@ async fn run_session(intent: &str, model: &str, budget_usd: f64) {
 
     match store.append_event(&event).await {
         Ok(()) => println!("[INTAKE] Intent received"),
-        Err(e) => { println!("[ERR] {}", e); return; }
+        Err(e) => {
+            println!("[ERR] {}", e);
+            return;
+        }
     }
     state.latest_event_id = event.event_id.clone();
     state = transition(&state, &event, &dag).unwrap();
@@ -274,14 +284,22 @@ async fn run_session(intent: &str, model: &str, budget_usd: f64) {
 
     let llm_plan;
 
-    match llm_proxy.proxy_call(llm_request, &mut budget_state, &cv).await {
+    match llm_proxy
+        .proxy_call(llm_request, &mut budget_state, &cv)
+        .await
+    {
         Ok((response, llm_event)) => {
             println!(
                 "[LLM]    {} → {} in, {} out, ${:.4} cost",
-                model, response.input_tokens, response.output_tokens,
+                model,
+                response.input_tokens,
+                response.output_tokens,
                 response.cost_cents as f64 / 100.0
             );
-            println!("         Plan: {}", &response.content[..200.min(response.content.len())]);
+            println!(
+                "         Plan: {}",
+                &response.content[..200.min(response.content.len())]
+            );
             llm_plan = response.content.clone();
 
             cv.increment(session_id);
@@ -322,12 +340,7 @@ async fn run_session(intent: &str, model: &str, budget_usd: f64) {
     println!("[PLAN]   Plan committed → {:?}", state.status);
 
     cv.increment(session_id);
-    let deps_event = NexusEvent::new(
-        EventType::DependenciesMet,
-        session_id,
-        cv.clone(),
-        None,
-    );
+    let deps_event = NexusEvent::new(EventType::DependenciesMet, session_id, cv.clone(), None);
     store.append_event(&deps_event).await.ok();
     state.latest_event_id = deps_event.event_id.clone();
     state = transition(&state, &deps_event, &dag).unwrap();
@@ -388,7 +401,9 @@ async fn run_session(intent: &str, model: &str, budget_usd: f64) {
                         state = next;
                     }
                     println!("[CKPT]   Step {} → {:?}", checkpoints, state.status);
-                } else if msg.get("result").is_some() && state.status == SessionStatus::Checkpointing {
+                } else if msg.get("result").is_some()
+                    && state.status == SessionStatus::Checkpointing
+                {
                     completed = true;
                     break;
                 } else if msg.get("error").is_some() {
@@ -409,7 +424,11 @@ async fn run_session(intent: &str, model: &str, budget_usd: f64) {
                         result: WorkerResult {
                             status: "completed".into(),
                             artifacts: vec![],
-                            metrics: WorkerMetrics { duration_ms: 0, tokens_consumed: 0, cost_cents: 0 },
+                            metrics: WorkerMetrics {
+                                duration_ms: 0,
+                                tokens_consumed: 0,
+                                cost_cents: 0,
+                            },
                         },
                         duration_ms: 0,
                     },
@@ -459,7 +478,11 @@ async fn run_session(intent: &str, model: &str, budget_usd: f64) {
                     result: WorkerResult {
                         status: "completed".into(),
                         artifacts: vec![],
-                        metrics: WorkerMetrics { duration_ms: 0, tokens_consumed: 0, cost_cents: 0 },
+                        metrics: WorkerMetrics {
+                            duration_ms: 0,
+                            tokens_consumed: 0,
+                            cost_cents: 0,
+                        },
                     },
                     duration_ms: 0,
                 },
@@ -477,7 +500,10 @@ async fn run_session(intent: &str, model: &str, budget_usd: f64) {
     let verdict = if worker_success { "OK" } else { "FAILED" };
     store.update_state(&state, state.version - 1).await.ok();
     println!();
-    println!("[{verdict}]   Session {verdict} — status {:?}", state.status);
+    println!(
+        "[{verdict}]   Session {verdict} — status {:?}",
+        state.status
+    );
     println!("Use 'nexus status {}' to check.", session_id.to_hex());
 }
 
@@ -490,7 +516,10 @@ async fn resume_session(session_id: &str, from: Option<u64>) {
 
     let store = match get_store().await {
         Ok(s) => s,
-        Err(e) => { println!("[ERR] {}", e); return; }
+        Err(e) => {
+            println!("[ERR] {}", e);
+            return;
+        }
     };
     let sid = match SessionId::from_hex(session_id) {
         Ok(s) => s,
@@ -537,7 +566,10 @@ async fn resume_session(session_id: &str, from: Option<u64>) {
 async fn show_status(session_id: &str) {
     let store = match get_store().await {
         Ok(s) => s,
-        Err(e) => { println!("[ERR] {}", e); return; }
+        Err(e) => {
+            println!("[ERR] {}", e);
+            return;
+        }
     };
     let sid = match SessionId::from_hex(session_id) {
         Ok(s) => s,
@@ -572,7 +604,10 @@ async fn show_status(session_id: &str) {
 async fn suspend_session(session_id: &str) {
     let store = match get_store().await {
         Ok(s) => s,
-        Err(e) => { println!("[ERR] {}", e); return; }
+        Err(e) => {
+            println!("[ERR] {}", e);
+            return;
+        }
     };
     let sid = SessionId::from_hex(session_id).unwrap_or_else(|_| SessionId::new());
     let _skip = &sid;
@@ -604,7 +639,10 @@ async fn suspend_session(session_id: &str) {
 async fn archive_session(session_id: &str) {
     let store = match get_store().await {
         Ok(s) => s,
-        Err(e) => { println!("[ERR] {}", e); return; }
+        Err(e) => {
+            println!("[ERR] {}", e);
+            return;
+        }
     };
     let sid = SessionId::from_hex(session_id).unwrap_or_else(|_| SessionId::new());
 
@@ -636,7 +674,10 @@ async fn archive_session(session_id: &str) {
 async fn export_session(session_id: &str, output: &str) {
     let store = match get_store().await {
         Ok(s) => s,
-        Err(e) => { println!("[ERR] {}", e); return; }
+        Err(e) => {
+            println!("[ERR] {}", e);
+            return;
+        }
     };
     let sid = match SessionId::from_hex(session_id) {
         Ok(s) => s,
@@ -680,7 +721,10 @@ async fn import_session(file: &str, as_id: Option<String>) {
     let data = tokio::fs::read_to_string(file).await.unwrap();
     let export: ExportData = serde_json::from_str(&data).unwrap();
 
-    println!("Importing session {} (format v{})", export.session_id, export.version);
+    println!(
+        "Importing session {} (format v{})",
+        export.session_id, export.version
+    );
     println!("Events: {}", export.events.len());
 
     if let Some(new_id) = as_id {
@@ -691,7 +735,10 @@ async fn import_session(file: &str, as_id: Option<String>) {
 async fn show_log(session_id: &str, limit: usize, _since: Option<String>) {
     let store = match get_store().await {
         Ok(s) => s,
-        Err(e) => { println!("[ERR] {}", e); return; }
+        Err(e) => {
+            println!("[ERR] {}", e);
+            return;
+        }
     };
     let sid = match SessionId::from_hex(session_id) {
         Ok(s) => s,
@@ -718,7 +765,8 @@ async fn show_log(session_id: &str, limit: usize, _since: Option<String>) {
                 println!(
                     "    ts: {}, cv: {}",
                     event.event_timestamp,
-                    &event.causal_vector.to_canonical()[..60.min(event.causal_vector.to_canonical().len())]
+                    &event.causal_vector.to_canonical()
+                        [..60.min(event.causal_vector.to_canonical().len())]
                 );
             }
 
@@ -733,7 +781,10 @@ async fn show_log(session_id: &str, limit: usize, _since: Option<String>) {
 async fn inspect_session(session_id: &str, show_state: bool, show_memory: bool, show_budget: bool) {
     let store = match get_store().await {
         Ok(s) => s,
-        Err(e) => { println!("[ERR] {}", e); return; }
+        Err(e) => {
+            println!("[ERR] {}", e);
+            return;
+        }
     };
     let sid = match SessionId::from_hex(session_id) {
         Ok(s) => s,
@@ -774,14 +825,8 @@ async fn inspect_session(session_id: &str, show_state: bool, show_memory: bool, 
                 println!();
                 println!("--- State ---");
                 println!("  Intent graph nodes: {}", state.intent_graph.nodes.len());
-                println!(
-                    "  Frontier nodes: {}",
-                    state.execution_frontier.nodes.len()
-                );
-                println!(
-                    "  Memory graph nodes: {}",
-                    state.memory_graph.nodes.len()
-                );
+                println!("  Frontier nodes: {}", state.execution_frontier.nodes.len());
+                println!("  Memory graph nodes: {}", state.memory_graph.nodes.len());
             }
         }
         Ok(None) => println!("Session not found"),

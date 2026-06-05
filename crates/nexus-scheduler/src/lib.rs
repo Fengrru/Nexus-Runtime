@@ -21,12 +21,12 @@ pub struct SchedulerTask {
     pub priority: u32,
 }
 
-pub mod local;
 pub mod docker;
 pub mod k8s;
 pub mod k8s_real;
+pub mod local;
 
-pub use local::LocalScheduler;
 pub use docker::DockerScheduler;
-pub use k8s::{K8sScheduler, K8sWorkerConfig, K8sPodSpec, K8sPodInfo, PodPhase};
+pub use k8s::{K8sPodInfo, K8sPodSpec, K8sScheduler, K8sWorkerConfig, PodPhase};
 pub use k8s_real::RealK8sScheduler;
+pub use local::LocalScheduler;

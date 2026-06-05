@@ -1,7 +1,7 @@
 #![deny(clippy::disallowed_types)]
 
-use nexus_core::{SessionId, TaskId, now_millis};
-use serde::{Serialize, Deserialize};
+use nexus_core::{now_millis, SessionId, TaskId};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,10 +145,7 @@ impl CapabilityToken {
 
     pub fn permits(&self, requested: &CapabilityScope) -> bool {
         match (&self.scope, requested) {
-            (
-                CapabilityScope::FsRead { path: granted },
-                CapabilityScope::FsRead { path: req },
-            ) => {
+            (CapabilityScope::FsRead { path: granted }, CapabilityScope::FsRead { path: req }) => {
                 let granted_canon = canonicalize_path(granted);
                 let req_canon = canonicalize_path(req);
                 req_canon.starts_with(&granted_canon)
@@ -330,7 +327,12 @@ fn kernel_version() -> (u32, u32, u32) {
         if parts.len() >= 3 {
             let major = parts[0].parse().unwrap_or(0);
             let minor = parts[1].parse().unwrap_or(0);
-            let patch = parts[2].split('-').next().unwrap_or("0").parse().unwrap_or(0);
+            let patch = parts[2]
+                .split('-')
+                .next()
+                .unwrap_or("0")
+                .parse()
+                .unwrap_or(0);
             return (major, minor, patch);
         }
     }
@@ -442,13 +444,7 @@ mod tests {
         let sid = SessionId::from_bytes([1u8; 16]);
         let tid = TaskId::from_bytes([2u8; 16]);
 
-        let token = CapabilityToken::issue(
-            key,
-            token_scope,
-            sid,
-            tid,
-            now_millis() + 3_600_000,
-        );
+        let token = CapabilityToken::issue(key, token_scope, sid, tid, now_millis() + 3_600_000);
 
         assert!(token.permits(&request));
     }
@@ -465,13 +461,7 @@ mod tests {
         let sid = SessionId::from_bytes([1u8; 16]);
         let tid = TaskId::from_bytes([2u8; 16]);
 
-        let token = CapabilityToken::issue(
-            key,
-            token_scope,
-            sid,
-            tid,
-            now_millis() + 3_600_000,
-        );
+        let token = CapabilityToken::issue(key, token_scope, sid, tid, now_millis() + 3_600_000);
 
         assert!(!token.permits(&request));
     }

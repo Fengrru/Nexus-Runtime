@@ -1,5 +1,5 @@
 use nexus_core::*;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct OpenClawGatewayAdapter {
@@ -38,11 +38,7 @@ impl OpenClawGatewayAdapter {
         (session_id, state)
     }
 
-    pub fn bridge_intent(
-        &self,
-        raw_input: &str,
-        source_channel: &str,
-    ) -> NexusEvent {
+    pub fn bridge_intent(&self, raw_input: &str, source_channel: &str) -> NexusEvent {
         let sid = self.session_id.expect("Session not initialized");
 
         let mut cv = CausalVector::new();
@@ -59,11 +55,7 @@ impl OpenClawGatewayAdapter {
         )
     }
 
-    pub fn bridge_result(
-        &self,
-        output: &str,
-        artifacts: Vec<ArtifactRef>,
-    ) -> OpenClawResponse {
+    pub fn bridge_result(&self, output: &str, artifacts: Vec<ArtifactRef>) -> OpenClawResponse {
         OpenClawResponse {
             session_id: self.session_id.unwrap_or_default().to_hex(),
             channel: self.channel.clone(),
@@ -79,9 +71,12 @@ impl OpenClawGatewayAdapter {
         artifacts: Vec<ArtifactRef>,
     ) -> Result<(String, String), String> {
         let response = self.bridge_result(output, artifacts);
-        let body = serde_json::to_string(&response)
-            .map_err(|e| format!("serialize response: {}", e))?;
-        let endpoint = format!("{}/sessions/{}/response", self.gateway_url, response.session_id);
+        let body =
+            serde_json::to_string(&response).map_err(|e| format!("serialize response: {}", e))?;
+        let endpoint = format!(
+            "{}/sessions/{}/response",
+            self.gateway_url, response.session_id
+        );
         Ok((endpoint, body))
     }
 
@@ -112,8 +107,7 @@ pub struct OpenClawIntent {
 
 impl OpenClawIntent {
     pub fn parse(raw_json: &str) -> Result<Self, String> {
-        serde_json::from_str(raw_json)
-            .map_err(|e| format!("parse OpenClaw intent: {}", e))
+        serde_json::from_str(raw_json).map_err(|e| format!("parse OpenClaw intent: {}", e))
     }
 }
 
@@ -123,8 +117,8 @@ mod tests {
 
     #[test]
     fn test_openclaw_adapter_session_init() {
-        let mut adapter = OpenClawGatewayAdapter::new("http://localhost:3000".into())
-            .with_channel("discord");
+        let mut adapter =
+            OpenClawGatewayAdapter::new("http://localhost:3000".into()).with_channel("discord");
         let (sid, state) = adapter.initialize_session("test intent");
 
         assert_eq!(state.status, SessionStatus::Created);
@@ -146,9 +140,7 @@ mod tests {
         let mut adapter = OpenClawGatewayAdapter::new("http://localhost:3000".into());
         adapter.initialize_session("test");
 
-        let (endpoint, body) = adapter
-            .bridge_to_http_payload("done", vec![])
-            .unwrap();
+        let (endpoint, body) = adapter.bridge_to_http_payload("done", vec![]).unwrap();
         assert!(endpoint.contains("/sessions/"));
         assert!(endpoint.contains("/response"));
         assert!(body.contains("done"));
@@ -156,7 +148,8 @@ mod tests {
 
     #[test]
     fn test_openclaw_intent_parse() {
-        let json = r#"{"intent": "refactor auth", "channel": "discord", "metadata": {"user": "alice"}}"#;
+        let json =
+            r#"{"intent": "refactor auth", "channel": "discord", "metadata": {"user": "alice"}}"#;
         let intent = OpenClawIntent::parse(json).unwrap();
         assert_eq!(intent.intent, "refactor auth");
         assert_eq!(intent.channel, "discord");

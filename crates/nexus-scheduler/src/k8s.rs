@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
+use crate::{CapabilityMode, SchedulerTask};
 use nexus_core::TaskId;
-use crate::{SchedulerTask, CapabilityMode};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct K8sWorkerConfig {
@@ -76,7 +76,9 @@ impl K8sScheduler {
         while dispatched.len() < self.max_concurrency
             && self.active_workers.len() < self.max_concurrency
         {
-            let Some(task) = self.ready_queue.pop() else { break };
+            let Some(task) = self.ready_queue.pop() else {
+                break;
+            };
 
             let can_dispatch = task.required_capabilities.iter().all(|cap| match cap.mode {
                 CapabilityMode::Exclusive => !self.lock_table.contains_key(&cap.resource),
@@ -86,8 +88,7 @@ impl K8sScheduler {
             if can_dispatch {
                 for cap in &task.required_capabilities {
                     if cap.mode == CapabilityMode::Exclusive {
-                        self.lock_table
-                            .insert(cap.resource.clone(), task.task_id);
+                        self.lock_table.insert(cap.resource.clone(), task.task_id);
                     }
                 }
 
@@ -117,7 +118,17 @@ impl K8sScheduler {
         let capabilities: Vec<String> = task
             .required_capabilities
             .iter()
-            .map(|c| format!("{}:{}", if c.mode == CapabilityMode::Exclusive { "exclusive" } else { "shared" }, c.resource))
+            .map(|c| {
+                format!(
+                    "{}:{}",
+                    if c.mode == CapabilityMode::Exclusive {
+                        "exclusive"
+                    } else {
+                        "shared"
+                    },
+                    c.resource
+                )
+            })
             .collect();
 
         K8sPodSpec {
@@ -261,7 +272,7 @@ spec:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RequiredCapability};
+    use crate::RequiredCapability;
 
     #[test]
     fn test_k8s_scheduler_dispatches_tasks() {

@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
 /// WASM Sandbox Worker — Executes untrusted community skills in WebAssembly sandbox.
 /// Provides memory isolation, capability restrictions, and timeout enforcement.
 use std::collections::BTreeMap;
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmSkill {
@@ -60,7 +60,11 @@ impl WasmSandboxWorker {
     }
 
     /// Execute a WASM skill with inputs, enforcing sandbox constraints.
-    pub fn execute(&self, skill: &WasmSkill, input: &WasmInput) -> Result<WasmOutput, SandboxViolation> {
+    pub fn execute(
+        &self,
+        skill: &WasmSkill,
+        input: &WasmInput,
+    ) -> Result<WasmOutput, SandboxViolation> {
         // Validate skill capabilities against allowed set
         for cap in &skill.capabilities {
             if !self.capabilities.contains(cap) && cap != "pure" {
@@ -94,16 +98,17 @@ impl WasmSandboxWorker {
     }
 
     /// Real WASM execution using wasmtime with fuel metering and memory limits.
-    fn execute_wasmtime(&self, skill: &WasmSkill, input: &WasmInput) -> Result<WasmOutput, SandboxViolation> {
-        use wasmtime::{
-            Engine, Module, Store, Linker, Memory, MemoryType,
-        };
+    fn execute_wasmtime(
+        &self,
+        skill: &WasmSkill,
+        input: &WasmInput,
+    ) -> Result<WasmOutput, SandboxViolation> {
+        use wasmtime::{Engine, Linker, Memory, MemoryType, Module, Store};
 
         let mut config = wasmtime::Config::new();
         config.consume_fuel(true);
 
-        let engine = Engine::new(&config)
-            .map_err(|_| SandboxViolation::InvalidInstruction)?;
+        let engine = Engine::new(&config).map_err(|_| SandboxViolation::InvalidInstruction)?;
 
         let module = Module::from_binary(&engine, &skill.wasm_bytes)
             .map_err(|_| SandboxViolation::InvalidInstruction)?;
@@ -112,7 +117,8 @@ impl WasmSandboxWorker {
 
         // Set fuel budget: ~10,000 instructions per ms
         let fuel_budget = skill.max_execution_ms * 10_000;
-        store.set_fuel(fuel_budget)
+        store
+            .set_fuel(fuel_budget)
             .map_err(|_| SandboxViolation::ExecutionTimeout)?;
 
         let mut linker = Linker::new(&engine);
@@ -120,19 +126,19 @@ impl WasmSandboxWorker {
         // Provide linear memory: minimum 1 page (64KB), max enforces memory limit
         let max_pages = Some((skill.max_memory_bytes / 65536).max(1) as u32);
         let mem_type = MemoryType::new(1, max_pages);
-        let memory = Memory::new(&mut store, mem_type)
-            .map_err(|_| SandboxViolation::MemoryLimitExceeded)?;
-        linker.define(&mut store, "env", "memory", memory)
+        let memory =
+            Memory::new(&mut store, mem_type).map_err(|_| SandboxViolation::MemoryLimitExceeded)?;
+        linker
+            .define(&mut store, "env", "memory", memory)
             .map_err(|_| SandboxViolation::InvalidInstruction)?;
 
-        let instance = linker.instantiate(&mut store, &module)
-            .map_err(|e| {
-                if e.to_string().contains("fuel") {
-                    SandboxViolation::ExecutionTimeout
-                } else {
-                    SandboxViolation::InvalidInstruction
-                }
-            })?;
+        let instance = linker.instantiate(&mut store, &module).map_err(|e| {
+            if e.to_string().contains("fuel") {
+                SandboxViolation::ExecutionTimeout
+            } else {
+                SandboxViolation::InvalidInstruction
+            }
+        })?;
 
         // Write input args into linear memory at offset 0
         {
@@ -150,10 +156,12 @@ impl WasmSandboxWorker {
 
         // Call the entry point function: fn(input_ptr: i32, input_len: i32) -> i32
         let start = std::time::Instant::now();
-        let entry = instance.get_typed_func::<(i32, i32), i32>(&mut store, &skill.entry_point)
+        let entry = instance
+            .get_typed_func::<(i32, i32), i32>(&mut store, &skill.entry_point)
             .map_err(|_| SandboxViolation::InvalidInstruction)?;
 
-        let result_ptr = entry.call(&mut store, (0i32, input.args.len() as i32))
+        let result_ptr = entry
+            .call(&mut store, (0i32, input.args.len() as i32))
             .map_err(|e| {
                 if e.to_string().contains("fuel") || e.to_string().contains("exhausted") {
                     SandboxViolation::ExecutionTimeout
@@ -195,7 +203,11 @@ impl WasmSandboxWorker {
         })
     }
 
-    fn simulate_execution_fallback(&self, skill: &WasmSkill, input: &WasmInput) -> Result<WasmOutput, SandboxViolation> {
+    fn simulate_execution_fallback(
+        &self,
+        skill: &WasmSkill,
+        input: &WasmInput,
+    ) -> Result<WasmOutput, SandboxViolation> {
         let start = std::time::Instant::now();
 
         use std::hash::{Hash, Hasher};
@@ -254,10 +266,8 @@ impl WasmSandboxWorker {
         }
 
         // Full bytecode validation via wasmtime Module::validate
-        if let Err(e) = wasmtime::Module::validate(
-            &wasmtime::Engine::default(),
-            &skill.wasm_bytes,
-        ) {
+        if let Err(e) = wasmtime::Module::validate(&wasmtime::Engine::default(), &skill.wasm_bytes)
+        {
             return Err(format!("WASM validation failed: {}", e));
         }
 
@@ -307,11 +317,8 @@ mod tests {
             // Type section: [i32, i32] -> [i32]
             0x01, 0x07, 0x01, 0x60, 0x02, 0x7F, 0x7F, 0x01, 0x7F,
             // Function section: 1 function using type 0
-            0x03, 0x02, 0x01, 0x00,
-            // Export section: "validate" -> function 0
-            0x07, 0x0C, 0x01, 0x08,
-            b'v', b'a', b'l', b'i', b'd', b'a', b't', b'e',
-            0x00, 0x00,
+            0x03, 0x02, 0x01, 0x00, // Export section: "validate" -> function 0
+            0x07, 0x0C, 0x01, 0x08, b'v', b'a', b'l', b'i', b'd', b'a', b't', b'e', 0x00, 0x00,
             // Code section: return 0
             0x0A, 0x06, 0x01, 0x04, 0x00, 0x41, 0x00, 0x0B,
         ];
@@ -352,8 +359,7 @@ mod tests {
 
     #[test]
     fn test_sandbox_execution() {
-        let worker = WasmSandboxWorker::new(65536, 5000)
-            .with_capabilities(vec!["pure".into()]);
+        let worker = WasmSandboxWorker::new(65536, 5000).with_capabilities(vec!["pure".into()]);
 
         let skill = create_test_skill();
         let input = WasmInput {
@@ -368,8 +374,7 @@ mod tests {
 
     #[test]
     fn test_sandbox_unauthorized_capability_rejected() {
-        let worker = WasmSandboxWorker::new(65536, 5000)
-            .with_capabilities(vec![]);
+        let worker = WasmSandboxWorker::new(65536, 5000).with_capabilities(vec![]);
 
         let skill = create_test_skill();
         let input = WasmInput {

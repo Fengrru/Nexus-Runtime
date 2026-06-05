@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, VecDeque};
+use crate::{CapabilityMode, SchedulerTask};
 use nexus_core::TaskId;
-use tokio::sync::Mutex;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
-use crate::{SchedulerTask, CapabilityMode};
+use tokio::sync::Mutex;
 
 pub struct LocalScheduler {
     ready_queue: VecDeque<SchedulerTask>,
@@ -89,7 +89,7 @@ impl LocalScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SchedulerTask, CapabilityMode, RequiredCapability};
+    use crate::{CapabilityMode, RequiredCapability, SchedulerTask};
 
     #[test]
     fn test_scheduler_dispatches_tasks() {

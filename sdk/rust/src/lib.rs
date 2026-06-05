@@ -1,8 +1,8 @@
 pub use nexus_core::*;
 pub use nexus_event_store::*;
 pub use nexus_rpc::*;
-pub use nexus_security::*;
 pub use nexus_scheduler::*;
+pub use nexus_security::*;
 
 use std::path::PathBuf;
 
@@ -146,7 +146,9 @@ impl Runtime {
         session_id: SessionId,
         store: &dyn EventStore,
     ) -> Result<SessionHandle, String> {
-        let events = store.get_events(session_id, None).await
+        let events = store
+            .get_events(session_id, None)
+            .await
             .map_err(|e| format!("failed to load events: {}", e))?;
 
         if events.is_empty() {

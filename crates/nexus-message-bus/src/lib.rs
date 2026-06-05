@@ -1,10 +1,10 @@
 #![deny(clippy::disallowed_types)]
 
+use nexus_core::*;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use nexus_core::*;
 use tokio::sync::{broadcast, Mutex, RwLock};
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CausalMessage {
@@ -113,26 +113,25 @@ impl CausalMessageBus {
 
     pub async fn subscribe(&self, topic: &str) -> broadcast::Receiver<CausalMessage> {
         let mut topics = self.topics.write().await;
-        let sender = topics
-            .entry(topic.to_string())
-            .or_insert_with(|| {
-                let (tx, _) = broadcast::channel(self.config.max_buffer_size);
-                tx
-            });
+        let sender = topics.entry(topic.to_string()).or_insert_with(|| {
+            let (tx, _) = broadcast::channel(self.config.max_buffer_size);
+            tx
+        });
         sender.subscribe()
     }
 
-    pub async fn receive_ordered(&self, rx: &mut broadcast::Receiver<CausalMessage>) -> Vec<CausalMessage> {
+    pub async fn receive_ordered(
+        &self,
+        rx: &mut broadcast::Receiver<CausalMessage>,
+    ) -> Vec<CausalMessage> {
         let mut batch = Vec::new();
         while let Ok(msg) = rx.try_recv() {
             batch.push(msg);
         }
-        batch.sort_by(|a, b| {
-            match a.causal_vector.compare(&b.causal_vector) {
-                CausalRelation::Before => std::cmp::Ordering::Less,
-                CausalRelation::After => std::cmp::Ordering::Greater,
-                CausalRelation::Concurrent => a.timestamp.cmp(&b.timestamp),
-            }
+        batch.sort_by(|a, b| match a.causal_vector.compare(&b.causal_vector) {
+            CausalRelation::Before => std::cmp::Ordering::Less,
+            CausalRelation::After => std::cmp::Ordering::Greater,
+            CausalRelation::Concurrent => a.timestamp.cmp(&b.timestamp),
         });
         batch
     }
@@ -147,10 +146,7 @@ impl CausalMessageBus {
         delivered.push(message_id);
     }
 
-    pub async fn check_causal_consistency(
-        &self,
-        incoming: &CausalVector,
-    ) -> Result<(), String> {
+    pub async fn check_causal_consistency(&self, incoming: &CausalVector) -> Result<(), String> {
         let log = self.causal_log.lock().await;
         for (msg_id, cv) in log.iter() {
             if cv.happened_before(incoming) {
@@ -269,13 +265,7 @@ mod tests {
         cv.increment(sid);
         cv.increment(sid);
 
-        let msg = CausalMessage::new(
-            sid,
-            cv.clone(),
-            "test".into(),
-            vec![],
-            "node-1".into(),
-        );
+        let msg = CausalMessage::new(sid, cv.clone(), "test".into(), vec![], "node-1".into());
 
         let _ = bus.publish(msg).await;
 

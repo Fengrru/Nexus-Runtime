@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use nexus_core::*;
 use nexus_event_store::{EventStore, StoreError};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkflowState {
@@ -145,10 +145,7 @@ impl EventStore for TemporalEventStore {
         }
     }
 
-    async fn record_side_effect_intent(
-        &self,
-        intent: &SideEffectIntent,
-    ) -> Result<(), StoreError> {
+    async fn record_side_effect_intent(&self, intent: &SideEffectIntent) -> Result<(), StoreError> {
         if let Some(ref store) = self.local_store {
             store.record_side_effect_intent(intent).await
         } else {
@@ -156,11 +153,7 @@ impl EventStore for TemporalEventStore {
         }
     }
 
-    async fn commit_side_effect(
-        &self,
-        id: &[u8],
-        response_hash: &str,
-    ) -> Result<(), StoreError> {
+    async fn commit_side_effect(&self, id: &[u8], response_hash: &str) -> Result<(), StoreError> {
         if let Some(ref store) = self.local_store {
             store.commit_side_effect(id, response_hash).await
         } else {
@@ -234,11 +227,8 @@ impl TemporalWorkflowManager {
     }
 
     pub fn with_local_store(mut self, store: Box<dyn EventStore>) -> Self {
-        self.store = TemporalEventStore::new(
-            self.namespace.clone(),
-            self.task_queue.clone(),
-        )
-        .with_local_store(store);
+        self.store = TemporalEventStore::new(self.namespace.clone(), self.task_queue.clone())
+            .with_local_store(store);
         self
     }
 
@@ -284,10 +274,7 @@ impl TemporalWorkflowManager {
         Ok(())
     }
 
-    pub async fn query_workflow_state(
-        &self,
-        _workflow_id: &str,
-    ) -> Result<WorkflowState, String> {
+    pub async fn query_workflow_state(&self, _workflow_id: &str) -> Result<WorkflowState, String> {
         Ok(WorkflowState::Running)
     }
 

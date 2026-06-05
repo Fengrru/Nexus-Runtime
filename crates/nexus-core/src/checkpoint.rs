@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
-use serde::{Serialize, Deserialize};
 use crate::types::*;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Checkpoint {

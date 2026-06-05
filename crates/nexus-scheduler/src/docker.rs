@@ -1,14 +1,14 @@
-use std::collections::BTreeMap;
+use crate::{CapabilityMode, SchedulerTask};
 use nexus_core::TaskId;
-use crate::{SchedulerTask, CapabilityMode};
+use std::collections::BTreeMap;
 
 #[cfg(feature = "docker")]
-use bollard::Docker;
-#[cfg(feature = "docker")]
 use bollard::container::{
-    Config as DockerConfig, CreateContainerOptions, HostConfig,
-    RemoveContainerOptions, StartContainerOptions,
+    Config as DockerConfig, CreateContainerOptions, HostConfig, RemoveContainerOptions,
+    StartContainerOptions,
 };
+#[cfg(feature = "docker")]
+use bollard::Docker;
 
 pub struct DockerScheduler {
     ready_queue: Vec<SchedulerTask>,
@@ -51,7 +51,9 @@ impl DockerScheduler {
         while dispatched.len() < self.max_concurrency
             && self.active_workers.len() < self.max_concurrency
         {
-            let Some(task) = self.ready_queue.pop() else { break };
+            let Some(task) = self.ready_queue.pop() else {
+                break;
+            };
 
             let can_dispatch = task.required_capabilities.iter().all(|cap| match cap.mode {
                 CapabilityMode::Exclusive => !self.lock_table.contains_key(&cap.resource),
@@ -61,14 +63,12 @@ impl DockerScheduler {
             if can_dispatch {
                 for cap in &task.required_capabilities {
                     if cap.mode == CapabilityMode::Exclusive {
-                        self.lock_table
-                            .insert(cap.resource.clone(), task.task_id);
+                        self.lock_table.insert(cap.resource.clone(), task.task_id);
                     }
                 }
 
                 let container_name = format!("nexus-worker-{}", hex::encode(&task.task_id.0[..8]));
-                self.active_workers
-                    .insert(task.task_id, container_name);
+                self.active_workers.insert(task.task_id, container_name);
                 dispatched.push(task.task_id);
             } else {
                 self.ready_queue.insert(0, task);
@@ -109,7 +109,10 @@ impl DockerScheduler {
         let env_vars: Vec<String> = capabilities
             .iter()
             .map(|c| format!("NEXUS_CAPABILITY={}", c))
-            .chain(std::iter::once(format!("NEXUS_TASK_ID={}", hex::encode(task_id.0))))
+            .chain(std::iter::once(format!(
+                "NEXUS_TASK_ID={}",
+                hex::encode(task_id.0)
+            )))
             .collect();
 
         let config = DockerConfig {

@@ -1,11 +1,11 @@
+use crate::types::*;
+use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader, Write};
 /// Real Worker Spawner — fork/exec Worker processes and communicate via stdio JSON-RPC.
 /// Supports Python, Node.js, and Rust workers. Detects crashes and handles recovery.
 use std::process::{Child, Command, Stdio};
-use std::io::{BufRead, BufReader, Write};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use crate::types::*;
 
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
@@ -96,12 +96,19 @@ impl WorkerSpawner {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
-            .map_err(|e| format!("Failed to spawn {} worker: {}", config.worker_type.worker_type_name(), e))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to spawn {} worker: {}",
+                    config.worker_type.worker_type_name(),
+                    e
+                )
+            })?;
 
         let pid = child.id();
-        let stdin = child.stdin.take()
-            .ok_or("Failed to capture worker stdin")?;
-        let stdout = child.stdout.take()
+        let stdin = child.stdin.take().ok_or("Failed to capture worker stdin")?;
+        let stdout = child
+            .stdout
+            .take()
             .ok_or("Failed to capture worker stdout")?;
         let reader = BufReader::new(stdout);
 
@@ -127,12 +134,8 @@ impl WorkerSpawner {
     }
 
     /// Send a JSON-RPC execute command to an already-spawned worker.
-    pub fn send_execute(
-        handle: &mut WorkerHandle,
-        config: &WorkerConfig,
-    ) -> Result<(), String> {
-        let stdin = handle.stdin.as_mut()
-            .ok_or("Worker stdin not available")?;
+    pub fn send_execute(handle: &mut WorkerHandle, config: &WorkerConfig) -> Result<(), String> {
+        let stdin = handle.stdin.as_mut().ok_or("Worker stdin not available")?;
 
         let msg = serde_json::json!({
             "jsonrpc": "2.0",
@@ -225,8 +228,10 @@ impl WorkerSpawner {
 
     /// Check if worker process is still alive.
     pub fn is_alive(handle: &WorkerHandle) -> bool {
-        matches!(handle.status, WorkerStatus::Starting | WorkerStatus::Running | WorkerStatus::Checkpointing)
-            && handle.child.id() == handle.pid
+        matches!(
+            handle.status,
+            WorkerStatus::Starting | WorkerStatus::Running | WorkerStatus::Checkpointing
+        ) && handle.child.id() == handle.pid
     }
 
     /// Wait for worker to exit and collect exit status.
@@ -255,8 +260,7 @@ mod tests {
 
     #[test]
     fn test_spawn_python_worker() {
-        let spawner = WorkerSpawner::new()
-            .with_python("python");
+        let spawner = WorkerSpawner::new().with_python("python");
 
         let config = WorkerConfig {
             task_id: TaskId::from_bytes([1u8; 16]),
@@ -283,15 +287,14 @@ mod tests {
             }
             Err(e) => {
                 // Python may not be installed on CI; skip gracefully
-                        eprintln!("Skipping worker spawn test (no Python): {}", e);
+                eprintln!("Skipping worker spawn test (no Python): {}", e);
             }
         }
     }
 
     #[test]
     fn test_worker_kill_signal() {
-        let spawner = WorkerSpawner::new()
-            .with_python("python");
+        let spawner = WorkerSpawner::new().with_python("python");
 
         let config = WorkerConfig {
             task_id: TaskId::from_bytes([3u8; 16]),

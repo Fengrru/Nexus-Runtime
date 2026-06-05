@@ -1,4 +1,4 @@
-use nexus_core::{NexusEvent, NexusState, SessionId, CausalVector};
+use nexus_core::{CausalVector, NexusEvent, NexusState, SessionId};
 use sqlx::FromRow;
 
 #[derive(Debug, FromRow)]

@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use std::collections::BTreeMap;
 use nexus_core::*;
+use std::collections::BTreeMap;
 
 fn bench_transition(c: &mut Criterion) {
     c.bench_function("transition_intent_received", |b| {
@@ -19,9 +19,7 @@ fn bench_transition(c: &mut Criterion) {
         );
         let dag = BTreeMap::new();
 
-        b.iter(|| {
-            transition(black_box(&state), black_box(&event), black_box(&dag)).unwrap()
-        });
+        b.iter(|| transition(black_box(&state), black_box(&event), black_box(&dag)).unwrap());
     });
 
     c.bench_function("transition_full_lifecycle_10_events", |b| {
@@ -89,9 +87,7 @@ fn bench_causal_vector(c: &mut Criterion) {
         after.increment(sid);
         after.increment(sid);
 
-        b.iter(|| {
-            before.happened_before(black_box(&after))
-        });
+        b.iter(|| before.happened_before(black_box(&after)));
     });
 
     c.bench_function("causal_vector_to_canonical", |b| {
@@ -101,9 +97,7 @@ fn bench_causal_vector(c: &mut Criterion) {
             cv.increment(sid);
         }
 
-        b.iter(|| {
-            cv.to_canonical()
-        });
+        b.iter(|| cv.to_canonical());
     });
 
     c.bench_function("causal_vector_from_canonical", |b| {
@@ -114,9 +108,7 @@ fn bench_causal_vector(c: &mut Criterion) {
         }
         let canonical = cv.to_canonical();
 
-        b.iter(|| {
-            CausalVector::from_canonical(black_box(&canonical)).unwrap()
-        });
+        b.iter(|| CausalVector::from_canonical(black_box(&canonical)).unwrap());
     });
 }
 
@@ -140,23 +132,17 @@ fn bench_serialization(c: &mut Criterion) {
             created_at: now_millis(),
         };
 
-        b.iter(|| {
-            serialize_deterministic(black_box(&cp))
-        });
+        b.iter(|| serialize_deterministic(black_box(&cp)));
     });
 
     c.bench_function("hash_blake3_1kb", |b| {
         let data = vec![0x42u8; 1024];
-        b.iter(|| {
-            compute_hash(black_box(&data))
-        });
+        b.iter(|| compute_hash(black_box(&data)));
     });
 
     c.bench_function("hash_blake3_64kb", |b| {
         let data = vec![0x42u8; 65536];
-        b.iter(|| {
-            compute_hash(black_box(&data))
-        });
+        b.iter(|| compute_hash(black_box(&data)));
     });
 }
 
@@ -183,9 +169,7 @@ fn bench_recovery(c: &mut Criterion) {
 
         let rm = RecoveryManager::new("/tmp/bench_vault".into());
 
-        b.iter(|| {
-            rm.recover_from_events(black_box(&events), sid).unwrap()
-        });
+        b.iter(|| rm.recover_from_events(black_box(&events), sid).unwrap());
     });
 
     c.bench_function("recover_1000_events", |b| {
@@ -210,9 +194,7 @@ fn bench_recovery(c: &mut Criterion) {
 
         let rm = RecoveryManager::new("/tmp/bench_vault".into());
 
-        b.iter(|| {
-            rm.recover_from_events(black_box(&events), sid).unwrap()
-        });
+        b.iter(|| rm.recover_from_events(black_box(&events), sid).unwrap());
     });
 }
 
@@ -226,10 +208,7 @@ fn bench_memory_graph(c: &mut Criterion) {
                     text: format!("memory node {}", i),
                 },
                 embedding: None,
-                causal_context: CausalVector::singleton(
-                    SessionId::from_bytes([1u8; 16]),
-                    i,
-                ),
+                causal_context: CausalVector::singleton(SessionId::from_bytes([1u8; 16]), i),
                 importance: 500,
                 activation: 0,
                 source_event_id: format!("evt_{}", i),
@@ -247,9 +226,7 @@ fn bench_memory_graph(c: &mut Criterion) {
             });
         }
 
-        b.iter(|| {
-            graph.query_causal("mem_0000", None, 3)
-        });
+        b.iter(|| graph.query_causal("mem_0000", None, 3));
     });
 }
 

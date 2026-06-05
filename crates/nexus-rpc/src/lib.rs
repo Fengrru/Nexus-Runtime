@@ -280,12 +280,7 @@ mod tests {
     fn test_canonicalize_payload() {
         let input = json!({"b": 2, "a": 1});
         let canonical = RpcCodec::canonicalize_worker_payload(&input);
-        let keys: Vec<String> = canonical
-            .as_object()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect();
+        let keys: Vec<String> = canonical.as_object().unwrap().keys().cloned().collect();
         assert_eq!(keys, vec!["a", "b"]);
     }
 }

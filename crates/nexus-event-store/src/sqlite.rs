@@ -1,11 +1,10 @@
-use async_trait::async_trait;
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
-use nexus_core::{
-    NexusEvent, NexusState, SessionId, SideEffectIntent, LlmCallRecord, ArtifactRef,
-    LockMode,
-};
-use super::store::{EventStore, StoreError};
 use super::rows::{EventRow, StateRow};
+use super::store::{EventStore, StoreError};
+use async_trait::async_trait;
+use nexus_core::{
+    ArtifactRef, LlmCallRecord, LockMode, NexusEvent, NexusState, SessionId, SideEffectIntent,
+};
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
 pub const CREATE_SCHEMA_SQL: &str = include_str!("../schema.sql");
 
@@ -62,7 +61,7 @@ impl EventStore for SqliteEventStore {
                 event_id, event_type, session_id, trace_id, parent_event_id,
                 causal_vector, payload, payload_hash, event_timestamp,
                 nonce, integrity_hash
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
         )
         .bind(&event.event_id)
         .bind(serde_json::to_string(&event.event_type).unwrap_or_default())
@@ -185,17 +184,10 @@ impl EventStore for SqliteEventStore {
         Ok(result.rows_affected() > 0)
     }
 
-    async fn record_side_effect_intent(
-        &self,
-        intent: &SideEffectIntent,
-    ) -> Result<(), StoreError> {
+    async fn record_side_effect_intent(&self, intent: &SideEffectIntent) -> Result<(), StoreError> {
         let request_payload = rmp_serde::to_vec(&intent.payload)
             .map_err(|e| StoreError::SerializationError(e.to_string()))?;
-        let idempotency_key = format!(
-            "{}:{}",
-            intent.session_id.to_hex(),
-            intent.request_hash
-        );
+        let idempotency_key = format!("{}:{}", intent.session_id.to_hex(), intent.request_hash);
         let id = uuid::Uuid::new_v4().into_bytes().to_vec();
 
         sqlx::query(
@@ -203,7 +195,7 @@ impl EventStore for SqliteEventStore {
                 id, session_id, event_id, idempotency_key,
                 effect_class, status, request_payload, request_hash,
                 response_payload, response_hash, compensation_data, committed_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'PENDING', ?6, ?7, NULL, NULL, NULL, NULL)"
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'PENDING', ?6, ?7, NULL, NULL, NULL, NULL)",
         )
         .bind(&id)
         .bind(intent.session_id.as_bytes().as_slice())
@@ -219,17 +211,13 @@ impl EventStore for SqliteEventStore {
         Ok(())
     }
 
-    async fn commit_side_effect(
-        &self,
-        id: &[u8],
-        response_hash: &str,
-    ) -> Result<(), StoreError> {
+    async fn commit_side_effect(&self, id: &[u8], response_hash: &str) -> Result<(), StoreError> {
         let rows = sqlx::query(
             "UPDATE side_effects SET
                 status = 'COMMITTED',
                 response_hash = ?2,
                 committed_at = ?3
-             WHERE id = ?1 AND status = 'PENDING'"
+             WHERE id = ?1 AND status = 'PENDING'",
         )
         .bind(id)
         .bind(response_hash)
@@ -239,9 +227,10 @@ impl EventStore for SqliteEventStore {
         .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
 
         if rows.rows_affected() == 0 {
-            return Err(StoreError::EventNotFound(
-                format!("side effect {:?} not found or already committed", id)
-            ));
+            return Err(StoreError::EventNotFound(format!(
+                "side effect {:?} not found or already committed",
+                id
+            )));
         }
 
         Ok(())
@@ -263,7 +252,7 @@ impl EventStore for SqliteEventStore {
             "INSERT OR REPLACE INTO resource_locks (
                 resource_id, owner_session, owner_task, mode,
                 acquired_at, lease_expiry, generation
-            ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, 1)"
+            ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, 1)",
         )
         .bind(resource_id)
         .bind(session_id.as_bytes().as_slice())
@@ -284,7 +273,7 @@ impl EventStore for SqliteEventStore {
     ) -> Result<bool, StoreError> {
         let rows = sqlx::query(
             "DELETE FROM resource_locks
-             WHERE resource_id = ?1 AND owner_session = ?2"
+             WHERE resource_id = ?1 AND owner_session = ?2",
         )
         .bind(resource_id)
         .bind(session_id.as_bytes().as_slice())
@@ -301,7 +290,7 @@ impl EventStore for SqliteEventStore {
                 request_id, session_id, event_id, model,
                 prompt_hash, response_hash, input_tokens, output_tokens,
                 cost_usd_cents, status, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )
         .bind(&call.request_id)
         .bind(call.session_id.as_bytes().as_slice())
@@ -329,7 +318,7 @@ impl EventStore for SqliteEventStore {
                 id, kind, uri, blake3, size,
                 produced_by_session, produced_by_event,
                 status, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'created', ?8)"
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'created', ?8)",
         )
         .bind(&id)
         .bind(format!("{:?}", artifact.kind).to_lowercase())
@@ -460,9 +449,16 @@ mod tests {
 
         // Insert an event first (FK constraint requires events row to exist)
         let event = NexusEvent::new(
-            EventType::IntentReceived { raw_input: "fk test".into(), source: "test".into() },
+            EventType::IntentReceived {
+                raw_input: "fk test".into(),
+                source: "test".into(),
+            },
             sid,
-            { let mut cv = CausalVector::new(); cv.increment(sid); cv },
+            {
+                let mut cv = CausalVector::new();
+                cv.increment(sid);
+                cv
+            },
             None,
         );
         store.append_event(&event).await.unwrap();
@@ -493,27 +489,55 @@ mod tests {
         // Build a full lifecycle
         let events = vec![
             NexusEvent::new(
-                EventType::IntentReceived { raw_input: "recovery test".into(), source: "test".into() },
+                EventType::IntentReceived {
+                    raw_input: "recovery test".into(),
+                    source: "test".into(),
+                },
                 sid,
-                { let mut cv = CausalVector::new(); cv.increment(sid); cv },
+                {
+                    let mut cv = CausalVector::new();
+                    cv.increment(sid);
+                    cv
+                },
                 None,
             ),
             NexusEvent::new(
-                EventType::IntentParsed { intent_graph: IntentGraph::default() },
+                EventType::IntentParsed {
+                    intent_graph: IntentGraph::default(),
+                },
                 sid,
-                { let mut cv = CausalVector::new(); cv.increment(sid); cv.increment(sid); cv },
+                {
+                    let mut cv = CausalVector::new();
+                    cv.increment(sid);
+                    cv.increment(sid);
+                    cv
+                },
                 None,
             ),
             NexusEvent::new(
-                EventType::PlanCommitted { frontier: Frontier::empty() },
+                EventType::PlanCommitted {
+                    frontier: Frontier::empty(),
+                },
                 sid,
-                { let mut cv = CausalVector::new(); cv.increment(sid); cv.increment(sid); cv.increment(sid); cv },
+                {
+                    let mut cv = CausalVector::new();
+                    cv.increment(sid);
+                    cv.increment(sid);
+                    cv.increment(sid);
+                    cv
+                },
                 None,
             ),
             NexusEvent::new(
                 EventType::DependenciesMet,
                 sid,
-                { let mut cv = CausalVector::new(); for _ in 0..4 { cv.increment(sid); } cv },
+                {
+                    let mut cv = CausalVector::new();
+                    for _ in 0..4 {
+                        cv.increment(sid);
+                    }
+                    cv
+                },
                 None,
             ),
             NexusEvent::new(
@@ -524,7 +548,13 @@ mod tests {
                     artifacts: vec![],
                 },
                 sid,
-                { let mut cv = CausalVector::new(); for _ in 0..5 { cv.increment(sid); } cv },
+                {
+                    let mut cv = CausalVector::new();
+                    for _ in 0..5 {
+                        cv.increment(sid);
+                    }
+                    cv
+                },
                 None,
             ),
         ];
@@ -573,7 +603,10 @@ mod tests {
         cv.increment(sid);
 
         let event = NexusEvent::new(
-            EventType::IntentReceived { raw_input: "causal test".into(), source: "test".into() },
+            EventType::IntentReceived {
+                raw_input: "causal test".into(),
+                source: "test".into(),
+            },
             sid,
             cv,
             None,
@@ -585,4 +618,3 @@ mod tests {
         assert_eq!(fetched.causal_vector.0.get(&sid), Some(&2u64));
     }
 }
-

@@ -1,18 +1,17 @@
+use crate::{CapabilityMode, SchedulerTask};
+#[cfg(feature = "kube-integration")]
+use k8s_openapi::api::core::v1::{
+    Container, ContainerPort, EnvVar, Pod, PodSpec, ResourceRequirements, SecurityContext,
+};
 /// Kubernetes scheduler using the kube crate.
 /// Manages worker pods in a K8s cluster.
 #[cfg(feature = "kube-integration")]
 use kube::{
-    api::{Api, PostParams, DeleteParams},
+    api::{Api, DeleteParams, PostParams},
     Client, Config,
 };
-#[cfg(feature = "kube-integration")]
-use k8s_openapi::api::core::v1::{
-    Pod, PodSpec, Container, EnvVar, SecurityContext,
-    ResourceRequirements, ContainerPort,
-};
-use std::collections::BTreeMap;
 use nexus_core::TaskId;
-use crate::{SchedulerTask, CapabilityMode};
+use std::collections::BTreeMap;
 
 pub struct RealK8sScheduler {
     ready_queue: Vec<SchedulerTask>,
@@ -29,11 +28,7 @@ pub struct RealK8sScheduler {
 
 impl RealK8sScheduler {
     #[cfg(feature = "kube-integration")]
-    pub async fn new(
-        max_concurrency: usize,
-        namespace: String,
-        worker_image: String,
-    ) -> Self {
+    pub async fn new(max_concurrency: usize, namespace: String, worker_image: String) -> Self {
         let client = Client::try_default().await.ok();
 
         if client.is_none() {
@@ -55,11 +50,7 @@ impl RealK8sScheduler {
     }
 
     #[cfg(not(feature = "kube"))]
-    pub async fn new(
-        max_concurrency: usize,
-        namespace: String,
-        worker_image: String,
-    ) -> Self {
+    pub async fn new(max_concurrency: usize, namespace: String, worker_image: String) -> Self {
         Self {
             ready_queue: Vec::new(),
             lock_table: BTreeMap::new(),
@@ -79,7 +70,9 @@ impl RealK8sScheduler {
         while dispatched.len() < self.max_concurrency
             && self.active_workers.len() < self.max_concurrency
         {
-            let Some(task) = self.ready_queue.pop() else { break };
+            let Some(task) = self.ready_queue.pop() else {
+                break;
+            };
             let can_dispatch = task.required_capabilities.iter().all(|cap| match cap.mode {
                 CapabilityMode::Exclusive => !self.lock_table.contains_key(&cap.resource),
                 CapabilityMode::Shared => true,
@@ -129,11 +122,16 @@ impl RealK8sScheduler {
                 containers: vec![Container {
                     name: "worker".into(),
                     image: Some(self.worker_image.clone()),
-                    env: Some(capabilities.iter().map(|c| EnvVar {
-                        name: "NEXUS_CAPABILITY".into(),
-                        value: Some(c.clone()),
-                        ..Default::default()
-                    }).collect()),
+                    env: Some(
+                        capabilities
+                            .iter()
+                            .map(|c| EnvVar {
+                                name: "NEXUS_CAPABILITY".into(),
+                                value: Some(c.clone()),
+                                ..Default::default()
+                            })
+                            .collect(),
+                    ),
                     security_context: Some(SecurityContext {
                         read_only_root_filesystem: Some(true),
                         allow_privilege_escalation: Some(false),
@@ -143,14 +141,34 @@ impl RealK8sScheduler {
                     resources: Some(ResourceRequirements {
                         requests: Some({
                             let mut req = BTreeMap::new();
-                            req.insert("cpu".into(), k8s_openapi::apimachinery::pkg::api::resource::Quantity("250m".into()));
-                            req.insert("memory".into(), k8s_openapi::apimachinery::pkg::api::resource::Quantity("256Mi".into()));
+                            req.insert(
+                                "cpu".into(),
+                                k8s_openapi::apimachinery::pkg::api::resource::Quantity(
+                                    "250m".into(),
+                                ),
+                            );
+                            req.insert(
+                                "memory".into(),
+                                k8s_openapi::apimachinery::pkg::api::resource::Quantity(
+                                    "256Mi".into(),
+                                ),
+                            );
                             req
                         }),
                         limits: Some({
                             let mut lim = BTreeMap::new();
-                            lim.insert("cpu".into(), k8s_openapi::apimachinery::pkg::api::resource::Quantity("500m".into()));
-                            lim.insert("memory".into(), k8s_openapi::apimachinery::pkg::api::resource::Quantity("512Mi".into()));
+                            lim.insert(
+                                "cpu".into(),
+                                k8s_openapi::apimachinery::pkg::api::resource::Quantity(
+                                    "500m".into(),
+                                ),
+                            );
+                            lim.insert(
+                                "memory".into(),
+                                k8s_openapi::apimachinery::pkg::api::resource::Quantity(
+                                    "512Mi".into(),
+                                ),
+                            );
                             lim
                         }),
                     }),
@@ -216,13 +234,21 @@ impl RealK8sScheduler {
         self.active_workers.remove(&task_id);
     }
 
-    pub fn pending_count(&self) -> usize { self.ready_queue.len() }
-    pub fn active_count(&self) -> usize { self.active_workers.len() }
+    pub fn pending_count(&self) -> usize {
+        self.ready_queue.len()
+    }
+    pub fn active_count(&self) -> usize {
+        self.active_workers.len()
+    }
     pub fn is_connected(&self) -> bool {
         #[cfg(feature = "kube-integration")]
-        { self.client.is_some() }
+        {
+            self.client.is_some()
+        }
         #[cfg(not(feature = "kube"))]
-        { false }
+        {
+            false
+        }
     }
 }
 
@@ -232,11 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_k8s_scheduler_dispatches() {
-        let mut sched = RealK8sScheduler::new(
-            3,
-            "nexus".into(),
-            "nexus/worker:v1".into(),
-        ).await;
+        let mut sched = RealK8sScheduler::new(3, "nexus".into(), "nexus/worker:v1".into()).await;
 
         let t1 = TaskId::from_bytes([1u8; 16]);
         sched.enqueue(SchedulerTask {

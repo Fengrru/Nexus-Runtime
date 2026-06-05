@@ -56,7 +56,10 @@ impl WorkerProtocol {
             })),
         };
         self.send_message(&json!(notif));
-        self.log(&format!("Checkpoint at step {} ({}%)", step, progress_percent));
+        self.log(&format!(
+            "Checkpoint at step {} ({}%)",
+            step, progress_percent
+        ));
     }
 
     #[allow(dead_code)]
@@ -156,15 +159,17 @@ impl WorkerProtocol {
         }
     }
 
-    fn execute_intent(&mut self, intent: &TaskIntentPayload) -> Result<Vec<ArtifactPayload>, String> {
+    fn execute_intent(
+        &mut self,
+        intent: &TaskIntentPayload,
+    ) -> Result<Vec<ArtifactPayload>, String> {
         let mut artifacts: Vec<ArtifactPayload> = Vec::new();
         let action_type = intent.action_type.as_str();
         let target = intent.target.as_str();
 
         match action_type {
             "read_file" => {
-                let content = std::fs::read(target)
-                    .map_err(|e| format!("Read failed: {}", e))?;
+                let content = std::fs::read(target).map_err(|e| format!("Read failed: {}", e))?;
                 self.step_index += 1;
                 self.send_checkpoint(
                     self.step_index,
@@ -180,8 +185,7 @@ impl WorkerProtocol {
                     .get("content")
                     .cloned()
                     .unwrap_or_default();
-                std::fs::write(target, &content)
-                    .map_err(|e| format!("Write failed: {}", e))?;
+                std::fs::write(target, &content).map_err(|e| format!("Write failed: {}", e))?;
                 self.step_index += 1;
                 self.send_checkpoint(
                     self.step_index,
@@ -197,8 +201,8 @@ impl WorkerProtocol {
                     .get("pattern")
                     .cloned()
                     .unwrap_or_default();
-                let content = std::fs::read_to_string(target)
-                    .map_err(|e| format!("Read failed: {}", e))?;
+                let content =
+                    std::fs::read_to_string(target).map_err(|e| format!("Read failed: {}", e))?;
                 let matches: Vec<&str> = content
                     .lines()
                     .filter(|line| line.contains(&pattern))

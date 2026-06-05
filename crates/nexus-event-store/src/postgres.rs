@@ -1,11 +1,10 @@
-use async_trait::async_trait;
-use sqlx::postgres::{PgPool, PgPoolOptions};
-use nexus_core::{
-    NexusEvent, NexusState, SessionId, SideEffectIntent, LlmCallRecord, ArtifactRef,
-    LockMode,
-};
-use super::store::{EventStore, StoreError};
 use super::rows::{EventRow, StateRow};
+use super::store::{EventStore, StoreError};
+use async_trait::async_trait;
+use nexus_core::{
+    ArtifactRef, LlmCallRecord, LockMode, NexusEvent, NexusState, SessionId, SideEffectIntent,
+};
+use sqlx::postgres::{PgPool, PgPoolOptions};
 
 pub struct PostgresEventStore {
     pool: PgPool,
@@ -39,7 +38,7 @@ impl EventStore for PostgresEventStore {
                 event_id, event_type, session_id, trace_id, parent_event_id,
                 causal_vector, payload, payload_hash, event_timestamp,
                 nonce, integrity_hash
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
         )
         .bind(&event.event_id)
         .bind(serde_json::to_string(&event.event_type).unwrap_or_default())
@@ -60,7 +59,10 @@ impl EventStore for PostgresEventStore {
     }
 
     async fn append_events(&self, events: &[NexusEvent]) -> Result<(), StoreError> {
-        let mut tx = self.pool.begin().await
+        let mut tx = self
+            .pool
+            .begin()
+            .await
             .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
 
         for event in events {
@@ -72,7 +74,7 @@ impl EventStore for PostgresEventStore {
                     event_id, event_type, session_id, trace_id, parent_event_id,
                     causal_vector, payload, payload_hash, event_timestamp,
                     nonce, integrity_hash
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
             )
             .bind(&event.event_id)
             .bind(serde_json::to_string(&event.event_type).unwrap_or_default())
@@ -90,7 +92,8 @@ impl EventStore for PostgresEventStore {
             .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
         }
 
-        tx.commit().await
+        tx.commit()
+            .await
             .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
 
         Ok(())
@@ -224,10 +227,7 @@ impl EventStore for PostgresEventStore {
         Ok(true)
     }
 
-    async fn record_side_effect_intent(
-        &self,
-        intent: &SideEffectIntent,
-    ) -> Result<(), StoreError> {
+    async fn record_side_effect_intent(&self, intent: &SideEffectIntent) -> Result<(), StoreError> {
         let payload_bytes = rmp_serde::to_vec(&intent.payload)
             .map_err(|e| StoreError::SerializationError(e.to_string()))?;
         let id_bytes = uuid::Uuid::new_v4().into_bytes().to_vec();
@@ -255,11 +255,7 @@ impl EventStore for PostgresEventStore {
         Ok(())
     }
 
-    async fn commit_side_effect(
-        &self,
-        id: &[u8],
-        response_hash: &str,
-    ) -> Result<(), StoreError> {
+    async fn commit_side_effect(&self, id: &[u8], response_hash: &str) -> Result<(), StoreError> {
         sqlx::query(
             "UPDATE side_effects SET
                 status = 'COMMITTED',

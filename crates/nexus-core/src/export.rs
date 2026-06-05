@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
-use crate::types::*;
 use crate::event::*;
-use crate::state_machine::*;
 use crate::protocol::*;
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
+use crate::state_machine::*;
+use crate::types::*;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionExport {
@@ -108,7 +108,10 @@ impl SessionExport {
         let session_id = SessionId::from_hex(&self.session_id)
             .map_err(|e| format!("invalid session ID: {}", e))?;
 
-        let mut state = NexusState::new(session_id, self.events.first().map(|e| e.timestamp).unwrap_or(0));
+        let mut state = NexusState::new(
+            session_id,
+            self.events.first().map(|e| e.timestamp).unwrap_or(0),
+        );
 
         let dag = BTreeMap::new();
 
@@ -155,24 +158,20 @@ impl SessionExport {
     }
 
     pub fn to_json(&self) -> Result<String, String> {
-        serde_json::to_string_pretty(self)
-            .map_err(|e| format!("JSON serialization error: {}", e))
+        serde_json::to_string_pretty(self).map_err(|e| format!("JSON serialization error: {}", e))
     }
 
     pub fn from_json(json: &str) -> Result<Self, String> {
-        serde_json::from_str(json)
-            .map_err(|e| format!("JSON deserialization error: {}", e))
+        serde_json::from_str(json).map_err(|e| format!("JSON deserialization error: {}", e))
     }
 
     pub fn to_file(&self, path: &str) -> Result<(), String> {
         let json = self.to_json()?;
-        std::fs::write(path, json)
-            .map_err(|e| format!("write error: {}", e))
+        std::fs::write(path, json).map_err(|e| format!("write error: {}", e))
     }
 
     pub fn from_file(path: &str) -> Result<Self, String> {
-        let json = std::fs::read_to_string(path)
-            .map_err(|e| format!("read error: {}", e))?;
+        let json = std::fs::read_to_string(path).map_err(|e| format!("read error: {}", e))?;
         Self::from_json(&json)
     }
 }
@@ -216,12 +215,7 @@ mod tests {
             ),
         ];
 
-        let export = SessionExport::from_session(
-            &events,
-            sid,
-            MemoryGraph::default(),
-            cv.clone(),
-        );
+        let export = SessionExport::from_session(&events, sid, MemoryGraph::default(), cv.clone());
 
         assert!(export.verify_integrity().is_ok());
 
@@ -280,12 +274,8 @@ mod tests {
         use tempfile::NamedTempFile;
 
         let sid = SessionId::from_bytes([1u8; 16]);
-        let export = SessionExport::from_session(
-            &[],
-            sid,
-            MemoryGraph::default(),
-            CausalVector::new(),
-        );
+        let export =
+            SessionExport::from_session(&[], sid, MemoryGraph::default(), CausalVector::new());
 
         let tmp = NamedTempFile::new().unwrap();
         let path = tmp.path().to_str().unwrap();
@@ -301,12 +291,8 @@ mod tests {
     #[test]
     fn test_export_hash_tamper_detection() {
         let sid = SessionId::from_bytes([1u8; 16]);
-        let mut export = SessionExport::from_session(
-            &[],
-            sid,
-            MemoryGraph::default(),
-            CausalVector::new(),
-        );
+        let mut export =
+            SessionExport::from_session(&[], sid, MemoryGraph::default(), CausalVector::new());
 
         assert!(export.verify_export_hash().is_ok());
 

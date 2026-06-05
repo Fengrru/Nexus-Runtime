@@ -1,54 +1,140 @@
-use std::collections::BTreeMap;
-use serde::{Serialize, Deserialize};
-use crate::types::*;
 use crate::protocol;
+use crate::types::*;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventType {
     // Intake phase
-    IntentReceived { raw_input: String, source: String },
-    IntentParsed { intent_graph: IntentGraph },
+    IntentReceived {
+        raw_input: String,
+        source: String,
+    },
+    IntentParsed {
+        intent_graph: IntentGraph,
+    },
 
     // Planning phase
-    PlanProposed { plan: ExecutionPlan, model: String, prompt_tokens: u64, completion_tokens: u64 },
-    PlanCommitted { frontier: Frontier },
-    PlanRejected { reason: String },
+    PlanProposed {
+        plan: ExecutionPlan,
+        model: String,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+    },
+    PlanCommitted {
+        frontier: Frontier,
+    },
+    PlanRejected {
+        reason: String,
+    },
 
     // Execution phase
     DependenciesMet,
-    FrontierValidated { validation_result: ValidationResult },
-    WorkerDispatched { worker_id: String, task_id: TaskId, worker_type: WorkerType },
-    WorkerStarted { worker_id: String, task_id: TaskId, pid: u32 },
-    WorkerCheckpoint { task_id: TaskId, step_index: u64, actions: Vec<Action>, artifacts: Vec<ArtifactRef> },
-    WorkerCompleted { worker_id: String, task_id: TaskId, result: WorkerResult, duration_ms: u64 },
-    WorkerFailed { worker_id: String, task_id: TaskId, error: String, error_code: ErrorCode, retry_count: u32 },
+    FrontierValidated {
+        validation_result: ValidationResult,
+    },
+    WorkerDispatched {
+        worker_id: String,
+        task_id: TaskId,
+        worker_type: WorkerType,
+    },
+    WorkerStarted {
+        worker_id: String,
+        task_id: TaskId,
+        pid: u32,
+    },
+    WorkerCheckpoint {
+        task_id: TaskId,
+        step_index: u64,
+        actions: Vec<Action>,
+        artifacts: Vec<ArtifactRef>,
+    },
+    WorkerCompleted {
+        worker_id: String,
+        task_id: TaskId,
+        result: WorkerResult,
+        duration_ms: u64,
+    },
+    WorkerFailed {
+        worker_id: String,
+        task_id: TaskId,
+        error: String,
+        error_code: ErrorCode,
+        retry_count: u32,
+    },
 
     // Convergence phase
-    ConvergeStarted { task_ids: Vec<TaskId> },
-    ConvergeComplete { merged_result: WorkerResult },
+    ConvergeStarted {
+        task_ids: Vec<TaskId>,
+    },
+    ConvergeComplete {
+        merged_result: WorkerResult,
+    },
 
     // Reflection phase
-    ReflectionStarted { checkpoint_seq: u64 },
-    ReflectionComplete { evaluation: Evaluation, memory_delta: Vec<MemoryDelta> },
-    MemoryConsolidated { memory_ids: Vec<String> },
+    ReflectionStarted {
+        checkpoint_seq: u64,
+    },
+    ReflectionComplete {
+        evaluation: Evaluation,
+        memory_delta: Vec<MemoryDelta>,
+    },
+    MemoryConsolidated {
+        memory_ids: Vec<String>,
+    },
 
     // Side effects
-    SideEffectIntent { effect: SideEffectIntent },
-    SideEffectCommitted { effect_id: String, result_hash: String, committed_at: u64 },
-    SideEffectCompensated { effect_id: String, compensation_result: String },
+    SideEffectIntent {
+        effect: SideEffectIntent,
+    },
+    SideEffectCommitted {
+        effect_id: String,
+        result_hash: String,
+        committed_at: u64,
+    },
+    SideEffectCompensated {
+        effect_id: String,
+        compensation_result: String,
+    },
 
     // Governance
-    HumanApprovalRequested { action: Action, reason: String, timeout_ms: u64 },
-    HumanApproved { approver: String, approved_at: u64 },
-    HumanRejected { rejecter: String, reason: String },
-    PolicyDecision { policy_id: String, decision: PolicyDecision, latency_ms: u64 },
+    HumanApprovalRequested {
+        action: Action,
+        reason: String,
+        timeout_ms: u64,
+    },
+    HumanApproved {
+        approver: String,
+        approved_at: u64,
+    },
+    HumanRejected {
+        rejecter: String,
+        reason: String,
+    },
+    PolicyDecision {
+        policy_id: String,
+        decision: PolicyDecision,
+        latency_ms: u64,
+    },
 
     // Session lifecycle
-    SessionSuspended { reason: String },
-    SessionResumed { from_checkpoint: u64, inherited_memories: Vec<String> },
-    SessionMigrated { from: SessionId, to: SessionId, export_hash: String },
-    SessionArchived { reason: String, final_status: SessionStatus },
+    SessionSuspended {
+        reason: String,
+    },
+    SessionResumed {
+        from_checkpoint: u64,
+        inherited_memories: Vec<String>,
+    },
+    SessionMigrated {
+        from: SessionId,
+        to: SessionId,
+        export_hash: String,
+    },
+    SessionArchived {
+        reason: String,
+        final_status: SessionStatus,
+    },
 }
 
 impl EventType {
@@ -149,10 +235,25 @@ impl NexusEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
-    ReadFile { path: String, artifact: ArtifactRef },
-    EditFile { path: String, search: String, replace: String, artifact: ArtifactRef },
-    RunCommand { command: String, args: Vec<String>, env: BTreeMap<String, String> },
-    GitCommit { message: String, files: Vec<String> },
+    ReadFile {
+        path: String,
+        artifact: ArtifactRef,
+    },
+    EditFile {
+        path: String,
+        search: String,
+        replace: String,
+        artifact: ArtifactRef,
+    },
+    RunCommand {
+        command: String,
+        args: Vec<String>,
+        env: BTreeMap<String, String>,
+    },
+    GitCommit {
+        message: String,
+        files: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

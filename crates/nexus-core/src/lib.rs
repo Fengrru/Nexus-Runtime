@@ -1,35 +1,39 @@
 #![deny(clippy::disallowed_types)]
 
-pub mod types;
-pub mod event;
-pub mod protocol;
-pub mod state_machine;
 pub mod checkpoint;
-pub mod memory;
-pub mod recovery;
 pub mod effects;
 pub mod entropy;
+pub mod event;
 pub mod export;
-pub mod migration;
 pub mod llm_proxy;
+pub mod memory;
+pub mod migration;
+pub mod protocol;
+pub mod recovery;
+pub mod state_machine;
+pub mod types;
 pub mod vault;
 pub mod wasm_worker;
 pub mod worker_spawner;
 
-pub use types::*;
-pub use event::*;
-pub use protocol::*;
-pub use state_machine::*;
 pub use checkpoint::*;
-pub use recovery::*;
 pub use effects::*;
 pub use entropy::*;
+pub use event::*;
 pub use export::SessionExport;
-pub use migration::{CrossNodeSession, SessionMigrationManager, MigrationStatus};
 pub use llm_proxy::{LlmProxy, LlmRequest, LlmResponse, ProxyError};
+pub use migration::{CrossNodeSession, MigrationStatus, SessionMigrationManager};
+pub use protocol::*;
+pub use recovery::*;
+pub use state_machine::*;
+pub use types::*;
 pub use vault::{ContentVault, VaultEntry, VaultError};
-pub use wasm_worker::{WasmSkill, WasmSandboxWorker, WasmSkillRegistry, WasmInput, WasmOutput, SandboxViolation};
-pub use worker_spawner::{WorkerSpawner, WorkerConfig as SpawnerConfig, WorkerHandle, WorkerStatus};
+pub use wasm_worker::{
+    SandboxViolation, WasmInput, WasmOutput, WasmSandboxWorker, WasmSkill, WasmSkillRegistry,
+};
+pub use worker_spawner::{
+    WorkerConfig as SpawnerConfig, WorkerHandle, WorkerSpawner, WorkerStatus,
+};
 
 #[cfg(test)]
 mod golden_tests;
