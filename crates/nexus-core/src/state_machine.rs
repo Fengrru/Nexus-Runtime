@@ -4,8 +4,8 @@ use crate::event::*;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum TransitionError {
-    #[error("Session mismatch: event session does not match current session")]
-    SessionMismatch,
+    #[error("Session mismatch: event for {event} applied to session {current}")]
+    SessionMismatch { current: String, event: String },
 
     #[error("Causal violation: event vector not monotonic")]
     CausalViolation,
@@ -35,7 +35,10 @@ pub fn transition(
     dag: &BTreeMap<TaskId, TaskNode>,
 ) -> Result<NexusState, TransitionError> {
     if event.session_id != current.session_id {
-        return Err(TransitionError::SessionMismatch);
+        return Err(TransitionError::SessionMismatch {
+            current: current.session_id.to_hex(),
+            event: event.session_id.to_hex(),
+        });
     }
 
     if !is_causally_valid(&current.causal_vector, &event.causal_vector) {
@@ -473,7 +476,7 @@ mod tests {
         );
 
         let result = transition(&state, &event, &BTreeMap::new());
-        assert!(matches!(result, Err(TransitionError::SessionMismatch)));
+        assert!(matches!(result, Err(TransitionError::SessionMismatch { .. })));
     }
 
     #[test]

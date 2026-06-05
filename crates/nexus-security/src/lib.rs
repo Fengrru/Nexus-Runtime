@@ -232,6 +232,18 @@ impl fmt::Display for CapabilityError {
     }
 }
 
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum SandboxError {
+    #[error("Landlock not available")]
+    LandlockUnavailable,
+    #[error("Seccomp not available")]
+    SeccompUnavailable,
+    #[error("Sandbox violation: {0}")]
+    Violation(String),
+    #[error("Platform not supported")]
+    UnsupportedPlatform,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxTier {
     Tier0,
@@ -243,12 +255,62 @@ impl SandboxTier {
     pub fn best_available() -> Self {
         #[cfg(target_os = "linux")]
         {
-            SandboxTier::Tier2
+            if Self::landlock_available() {
+                return SandboxTier::Tier0;
+            }
+            if Self::seccomp_available() {
+                return SandboxTier::Tier1;
+            }
         }
-        #[cfg(not(target_os = "linux"))]
+        SandboxTier::Tier2
+    }
+
+    #[cfg(target_os = "linux")]
+    #[cfg(target_os = "linux")]
+    fn landlock_available() -> bool {
+        let kernel = crate::kernel_version();
+        kernel >= (5, 13, 0)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn seccomp_available() -> bool {
+        crate::kernel_version() >= (3, 5, 0)
+    }
+
+    pub fn apply(&self, cmd: &mut std::process::Command) -> Result<(), SandboxError> {
+        match self {
+            SandboxTier::Tier0 => self.apply_tier0(cmd),
+            SandboxTier::Tier1 => self.apply_tier1(cmd),
+            SandboxTier::Tier2 => self.apply_tier2(cmd),
+        }
+    }
+
+    fn apply_tier0(&self, cmd: &mut std::process::Command) -> Result<(), SandboxError> {
+        #[cfg(target_os = "linux")]
         {
-            SandboxTier::Tier2
+            if !Self::landlock_available() {
+                return Err(SandboxError::LandlockUnavailable);
+            }
+            if !Self::seccomp_available() {
+                return Err(SandboxError::SeccompUnavailable);
+            }
         }
+        cmd.env("NEXUS_READONLY", "1");
+        Ok(())
+    }
+
+    fn apply_tier1(&self, _cmd: &mut std::process::Command) -> Result<(), SandboxError> {
+        #[cfg(target_os = "linux")]
+        {
+            if !Self::seccomp_available() {
+                return Err(SandboxError::SeccompUnavailable);
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_tier2(&self, _cmd: &mut std::process::Command) -> Result<(), SandboxError> {
+        Ok(())
     }
 
     pub fn description(&self) -> &'static str {
@@ -258,6 +320,21 @@ impl SandboxTier {
             SandboxTier::Tier2 => "Command audit + logging",
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn kernel_version() -> (u32, u32, u32) {
+    if let Ok(output) = std::process::Command::new("uname").arg("-r").output() {
+        let release = String::from_utf8_lossy(&output.stdout);
+        let parts: Vec<&str> = release.trim().split('.').collect();
+        if parts.len() >= 3 {
+            let major = parts[0].parse().unwrap_or(0);
+            let minor = parts[1].parse().unwrap_or(0);
+            let patch = parts[2].split('-').next().unwrap_or("0").parse().unwrap_or(0);
+            return (major, minor, patch);
+        }
+    }
+    (0, 0, 0)
 }
 
 pub struct CapabilityManager {

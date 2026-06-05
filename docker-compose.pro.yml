@@ -1,0 +1,31 @@
+version: '3.8'
+services:
+  nexus:
+    image: nexus/pro:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXUS_MODE=pro
+      - NEXUS_DB_URL=postgres://nexus:password@postgres:5432/nexus
+      - NEXUS_REDIS_URL=redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=nexus
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=nexus
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  redis_data:

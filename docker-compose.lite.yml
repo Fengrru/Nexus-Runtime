@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  nexus:
+    image: nexus/lite:latest
+    volumes:
+      - ~/.nexus:/data
+    environment:
+      - NEXUS_MODE=lite
+      - NEXUS_DB_PATH=/data/events.db
+      - NEXUS_VAULT_PATH=/data/vault
