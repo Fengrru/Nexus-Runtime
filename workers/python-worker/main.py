@@ -163,7 +163,19 @@ class WorkerProtocol:
 
     def _execute_plan(self, plan_json: str) -> Dict[str, Any]:
         """Execute a multi-step plan. Each step is: {action_type, target, parameters}."""
-        steps = json.loads(plan_json)
+        # Strip markdown code fences if present
+        cleaned = plan_json.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            cleaned = "\n".join(lines).strip()
+        try:
+            steps = json.loads(cleaned)
+        except json.JSONDecodeError:
+            return {"error": f"Invalid JSON plan: {cleaned[:200]}"}
         if not isinstance(steps, list):
             return {"error": "Plan must be a JSON array of steps"}
 
@@ -212,12 +224,14 @@ class WorkerProtocol:
     def _dispatch_action(self, action_type: str, target: str, params: Dict) -> Dict:
         """Execute a single action, returning {error: ...} or {artifact: ...}."""
         if action_type == "read_file":
-            try:
-                with open(target, "r", encoding="utf-8") as f:
-                    content = f.read()
-                return {"artifact": self._create_artifact("file", target, content)}
-            except FileNotFoundError:
-                return {"error": f"File not found: {target}"}
+            for encoding in ["utf-8", "utf-16", "latin-1"]:
+                try:
+                    with open(target, "r", encoding=encoding) as f:
+                        content = f.read()
+                    return {"artifact": self._create_artifact("file", target, content)}
+                except (UnicodeDecodeError, FileNotFoundError):
+                    continue
+            return {"error": f"Cannot read file: {target}"}
 
         elif action_type == "write_file":
             content = params.get("content", "")

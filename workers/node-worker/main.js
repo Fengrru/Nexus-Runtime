@@ -143,11 +143,22 @@ class WorkerProtocol {
     }
 
     executePlan(planJson) {
+        // Strip markdown code fences if present
+        let cleaned = planJson.trim();
+        if (cleaned.startsWith('```')) {
+            let lines = cleaned.split('\n');
+            if (lines[0].startsWith('```')) lines = lines.slice(1);
+            if (lines.length && lines[lines.length - 1].trim().startsWith('```')) {
+                lines = lines.slice(0, -1);
+            }
+            cleaned = lines.join('\n').trim();
+        }
+
         let steps;
         try {
-            steps = JSON.parse(planJson);
+            steps = JSON.parse(cleaned);
         } catch {
-            return { error: 'Plan must be valid JSON array' };
+            return { error: 'Invalid JSON plan: ' + cleaned.substring(0, 200) };
         }
 
         if (!Array.isArray(steps)) {
