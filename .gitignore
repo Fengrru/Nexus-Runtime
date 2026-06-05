@@ -1,6 +1,5 @@
 /target/
 **/*.rs.bk
-Cargo.lock
 *.db
 *.db-journal
 *.db-wal
@@ -12,3 +11,7 @@ Cargo.lock
 *~
 .DS_Store
 __pycache__/
+*.pdb
+*.exe
+.env
+*.log
