@@ -1,3 +1,5 @@
+<div align="center">
+
 # Nexus Runtime
 
 **Causally-consistent execution substrate for autonomous agent systems.**
@@ -5,6 +7,8 @@
 [![Rust](https://img.shields.io/badge/rust-1.80+-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![Tests](https://img.shields.io/badge/tests-132%20passed-brightgreen.svg)]()
+
+</div>
 
 Nexus Runtime is not an agent framework, not a chatbot wrapper, not a cloud SaaS. It is infrastructure that makes agent execution durable, auditable, and portable.
 
